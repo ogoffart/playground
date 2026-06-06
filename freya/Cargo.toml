@@ -1,0 +1,19 @@
+[package]
+name = "git-review-freya"
+version = "0.1.0"
+edition = "2021"
+description = "A GitHub-style git code review desktop app, built with Freya"
+
+[[bin]]
+name = "git-review-freya"
+path = "src/main.rs"
+
+[dependencies]
+freya = "0.4.0-rc.22"
+git2 = "0.20"
+syntect = { version = "5", default-features = false, features = ["default-fancy"] }
+two-face = "0.5"
+jiff = "0.2"
+
+[profile.dev]
+opt-level = 1
