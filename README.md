@@ -51,5 +51,26 @@ egui/target/debug/git-review-egui /tmp/git-review-sample
 
 ## Status
 
-Apps are landed one framework at a time; this table is updated as each is completed and
-build-verified. See per-folder READMEs for the current state and any framework-specific notes.
+Apps are landed one framework at a time, each build-verified and smoke-tested headless
+(`xvfb` + a screenshot against the sample repo). See each folder's `README.md` and
+`screenshot.png` for details.
+
+| Framework | State | Notes |
+|---|---|---|
+| egui | ✅ done | immediate-mode; hand-laid diff rows, overlay sticky header |
+| gtk4 | ✅ done | `GtkPaned` splits, GtkSourceView/TextTag diff, overlay sticky |
+| slint | ✅ done | declarative markup, draggable splitters, Flickable + floating sticky |
+| iced | ✅ done | `pane_grid` splits, `rich_text` spans, overlay sticky |
+| qt-qmetaobject | ✅ done | QML `SplitView`, `ListView` sections = true sticky headers |
+| tauri | ✅ done | web frontend, CSS `position: sticky`, collapsible file tree |
+| dioxus | ✅ done | RSX + CSS sticky headers; libxdo link stub for headless |
+| floem | ⏳ in progress | |
+| qt-cxx | ⏳ in progress | |
+| gpui | ⏳ in progress | |
+| xilem | ⏳ in progress | |
+| qt-widgets | ⏳ pending | |
+| makepad | ⏳ pending | |
+| freya | ⏳ pending | |
+
+All native apps build `git2`'s vendored libgit2; the Qt apps need Qt 6 + the QtQuick QML modules,
+the GTK app needs GTK 4 + GtkSourceView 5, and the web apps need webkit2gtk.
