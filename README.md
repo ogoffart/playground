@@ -79,8 +79,8 @@ Rows sorted by total bundle.
 | **xilem** | 27.4 MiB | — self-contained (bundles Vello) | 27.4 MiB | 9.6 MiB | 1185 |
 | **gtk4** | 2.5 MiB | +28.8 MiB · GTK 4 + GtkSourceView (35 libs) | **31.4 MiB** | 12.4 MiB | 1321 |
 | **qt-widgets** | 2.5 MiB | +66.0 MiB · Qt 6 Widgets (24 libs) | **68.6 MiB** | 27.9 MiB | 1225 |
-| **qt-cxx** | 3.2 MiB | +77.9 MiB · Qt 6 Quick/QML (53 libs) | **81.2 MiB** | 32.7 MiB | 1074 |
-| **qt-qmetaobject** | 2.5 MiB | +85.1 MiB · Qt 6 Quick/QML (54 libs) | **87.7 MiB** | 35.5 MiB | 952 |
+| **qt-cxx** | 3.2 MiB | +77.9 MiB · Qt 6 Quick/QML — no QtWidgets (53 libs) | **81.2 MiB** | 32.7 MiB | 1074 |
+| **qt-qmetaobject** | 2.5 MiB | +85.1 MiB · Qt 6 Quick/QML — incl. QtWidgets (54 libs) | **87.7 MiB** | 35.5 MiB | 952 |
 | **tauri** | 5.2 MiB | +196.9 MiB · WebKitGTK + GTK (80 libs) | **202.2 MiB** | 75.6 MiB | 1329 |
 | **dioxus** | 6.0 MiB | +196.9 MiB · WebKitGTK + GTK (81 libs) | **203.0 MiB** | 75.6 MiB | 1385 |
 
