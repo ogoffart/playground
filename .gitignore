@@ -1,0 +1,18 @@
+# Rust
+target/
+**/target/
+*.rs.bk
+
+# Node / web frontends
+node_modules/
+dist/
+.vite/
+
+# Editor / OS
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Generated demo repo (created by tools/make-sample-repo.sh)
+/sample-repo/
