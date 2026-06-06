@@ -60,29 +60,41 @@ size-optimized release profile (`opt-level="z"`, `lto`, `codegen-units=1`, `pani
 
 ### Size, code & build
 
-| Framework | Release binary | Compressed (gzip) | UI LOC | Runtime deps (not in binary) |
-|---|--:|--:|--:|---|
-| **qt-qmetaobject** | 2.5 MiB | 1.55 MiB | 952 | Qt 6 + QtQuick QML modules |
-| **qt-widgets** | 2.5 MiB | 1.56 MiB | 1225 | Qt 6 |
-| **gtk4** | 2.5 MiB | 1.56 MiB | 1321 | GTK 4 + GtkSourceView 5 |
-| **qt-cxx** | 3.2 MiB | 1.72 MiB | 1074 | Qt 6 + QtQuick QML modules |
-| **tauri** | 5.2 MiB | 2.58 MiB | 1329 | webkit2gtk-4.1 + system webview |
-| **dioxus** | 6.0 MiB | 2.61 MiB | 1385 | webkit2gtk-4.1 |
-| **makepad** | 6.8 MiB | 3.26 MiB | 1236 | GL driver only (self-contained) |
-| **egui** | 9.1 MiB | 4.24 MiB | 991 | GL driver only (self-contained) |
-| **iced** | 9.9 MiB | 4.65 MiB | 1139 | GPU/GL driver (self-contained) |
-| **gpui** | 10.5 MiB | 4.93 MiB | 1336 | Vulkan (self-contained) |
-| **slint** | 10.6 MiB | 4.89 MiB | 1274 | GPU/GL driver (self-contained) |
-| **floem** | 11.3 MiB | 5.25 MiB | 1239 | GPU/GL driver (self-contained) |
-| **freya** | 23.3 MiB | 10.4 MiB | 1404 | GPU/GL driver (self-contained, bundles Skia) |
-| **xilem** | 27.4 MiB | 9.6 MiB | 1185 | Vulkan (self-contained, bundles Vello) |
+`+ toolkit libraries` is the actual set of shared libraries the binary loads, **excluding** the
+guaranteed-present Linux desktop base (glibc, X11/xcb, GL/EGL/Vulkan/drm, wayland, xkbcommon,
+fontconfig/freetype, alsa/pulse, dbus/systemd, zlib) — measured by `ldd`-closure. "Total bundle"
+is what a fully self-contained download (AppImage-style) would actually contain; the gzip column
+is that bundle compressed. UI LOC excludes the shared 463-line `git2`+`syntect` data layer.
+Rows sorted by total bundle.
 
-> **Reading the sizes fairly:** the small binaries (Qt, GTK, web) are *not* actually smaller to
-> ship — they dynamically link a large toolkit the user must already have (or you bundle it:
-> Qt 6 ≈ 30–80 MB, GTK 4 ≈ 40 MB, a webview is usually system-provided). The self-contained
-> Rust-renderer apps statically link everything (font shaping, GPU abstraction, and for freya a
-> whole copy of Skia, for xilem all of Vello), so their binary *is* the shippable artifact. So
-> "smallest binary" and "smallest real download" are nearly opposite rankings.
+| Framework | Stripped binary | + Toolkit libraries (bundled) | = Total bundle | Bundle gzip | UI LOC |
+|---|--:|--:|--:|--:|--:|
+| **makepad** | 6.8 MiB | — self-contained | 6.8 MiB | 3.3 MiB | 1236 |
+| **egui** | 9.1 MiB | — self-contained | 9.1 MiB | 4.2 MiB | 991 |
+| **iced** | 9.9 MiB | — self-contained | 9.9 MiB | 4.7 MiB | 1139 |
+| **gpui** | 10.5 MiB | — self-contained | 10.5 MiB | 4.9 MiB | 1336 |
+| **slint** | 10.6 MiB | — self-contained | 10.6 MiB | 4.9 MiB | 1274 |
+| **floem** | 11.3 MiB | — self-contained | 11.3 MiB | 5.3 MiB | 1239 |
+| **freya** | 23.3 MiB | — self-contained (bundles Skia) | 23.3 MiB | 10.4 MiB | 1404 |
+| **xilem** | 27.4 MiB | — self-contained (bundles Vello) | 27.4 MiB | 9.6 MiB | 1185 |
+| **gtk4** | 2.5 MiB | +28.8 MiB · GTK 4 + GtkSourceView (35 libs) | **31.4 MiB** | 12.4 MiB | 1321 |
+| **qt-widgets** | 2.5 MiB | +66.0 MiB · Qt 6 Widgets (24 libs) | **68.6 MiB** | 27.9 MiB | 1225 |
+| **qt-cxx** | 3.2 MiB | +77.9 MiB · Qt 6 Quick/QML (53 libs) | **81.2 MiB** | 32.7 MiB | 1074 |
+| **qt-qmetaobject** | 2.5 MiB | +85.1 MiB · Qt 6 Quick/QML (54 libs) | **87.7 MiB** | 35.5 MiB | 952 |
+| **tauri** | 5.2 MiB | +196.9 MiB · WebKitGTK + GTK (80 libs) | **202.2 MiB** | 75.6 MiB | 1329 |
+| **dioxus** | 6.0 MiB | +196.9 MiB · WebKitGTK + GTK (81 libs) | **203.0 MiB** | 75.6 MiB | 1385 |
+
+> **The headline:** "smallest binary" and "smallest download" are almost opposite rankings. The
+> Qt/GTK/web apps have the tiniest binaries (2.5–6 MiB) but pull in 29–197 MiB of toolkit
+> libraries; the self-contained Rust-renderer apps statically link everything (egui's whole
+> renderer, freya's copy of Skia, xilem's Vello) so the binary *is* the bundle.
+>
+> **In practice you often don't ship the toolkit:** webkit/GTK/Qt are frequently already on the
+> user's machine (or installed via the package manager), in which case tauri/dioxus/gtk4/qt ship
+> just their 2.5–6 MiB binary. The `+ toolkit` column is the **worst-case fully-bundled** cost
+> (e.g. a self-contained AppImage). The self-contained Rust apps always pay their full binary but
+> depend on nothing beyond the base desktop. Sizes are this Linux build; Windows/macOS differ
+> (e.g. tauri uses the OS WebView ≈ 0 extra; Qt/GTK would still be bundled).
 
 ### Strengths, limitations & score
 
