@@ -14,6 +14,14 @@ syntect = { version = "5", default-features = false, features = ["default-fancy"
 two-face = "0.5"
 jiff = "0.2"
 floem = "0.2.0"
+dark-light = "2.0"
 
 [profile.dev]
 opt-level = 1
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
