@@ -1,0 +1,4 @@
+# cxx-qt-build locates Qt by invoking qmake. Point it at the Qt6 qmake.
+[env]
+QMAKE = "/usr/bin/qmake6"
+QMAKE6 = "/usr/bin/qmake6"
