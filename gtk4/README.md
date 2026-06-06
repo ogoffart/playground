@@ -38,11 +38,25 @@ framework-agnostic (`git2` + `syntect`/`two-face`). Only `main.rs` and `app.rs` 
 
 ## How GTK4 handled the tricky parts (for the comparison)
 
-- **Resizable splits — GtkPaned, GTK's home turf.** The layout is an outer horizontal `Paned`
-  (side panel | main) wrapping an inner vertical `Paned` (commit list | file tree). This is
-  exactly what `GtkPaned` is for: native draggable handles, `set_position`, and per-child
-  `resize`/`shrink` flags. The cleanest split implementation of any framework here — no manual
-  drag math.
+- **Layout — full-width toolbar over GtkPaned splits.** The window's child is a vertical `Box`:
+  a single full-width toolbar (styled `Box` with a bottom border and inset toggle buttons) pinned
+  at the very top, then an outer horizontal `Paned` (side panel | main) wrapping an inner vertical
+  `Paned` (commit list | file tree). `GtkPaned` gives native draggable handles, `set_position`,
+  and per-child `resize`/`shrink` flags — the cleanest split implementation of any framework here,
+  no manual drag math.
+
+- **Real file tree — GtkTreeListModel + GtkListView.** The flat `FileDiff` list is folded into a
+  real hierarchy (`build_tree`) and exposed as `FileNode` GObjects through a `TreeListModel` driven
+  by a `GtkListView` whose factory rows carry a `GtkTreeExpander` (disclosure triangle) + icon +
+  name + `+a −r` counts. Directories expand by default; single-child directory *chains* are
+  collapsed GitHub-style (`a/b` shown as one node) while distinct subtrees branch. Clicking a leaf
+  scrolls the diff to that file; clicking a folder toggles its expansion (`connect_activate`).
+
+- **System light/dark theme.** At startup `load_css` resolves the desktop scheme via GTK's
+  `gtk-application-prefer-dark-theme` setting (which GTK populates from the freedesktop
+  `color-scheme` portal / `prefers-color-scheme`) and locks the matching GitHub palette (light or
+  dark). The CSS provider and all `TextTag` colours are generated from that palette, so chrome and
+  diff colours both track the OS. Headless (no preference) defaults to light.
 
 - **Diff rendering — TextView + TextTags, not a grid of widgets.** Each file's unified diff is a
   single `TextView`/`TextBuffer`. Full-width green/red line backgrounds use

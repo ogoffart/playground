@@ -20,29 +20,78 @@ use std::rc::Rc;
 use git2::Oid;
 use gtk::prelude::*;
 use gtk::{
-    gdk, glib, pango, Align, Application, ApplicationWindow, Box as GtkBox, Button,
-    CssProvider, Label, ListBox, ListBoxRow, Orientation, Overlay, Paned, PolicyType,
-    ScrolledWindow, SelectionMode, TextBuffer, TextTag, TextView, ToggleButton, WrapMode,
+    gdk, gio, glib, pango, Align, Application, ApplicationWindow, Box as GtkBox, Button,
+    CssProvider, Label, ListBox, ListBoxRow, ListView, Orientation, Overlay, Paned, PolicyType,
+    ScrolledWindow, SelectionMode, SignalListItemFactory, SingleSelection, TextBuffer, TextTag,
+    TextView, ToggleButton, TreeExpander, TreeListModel, TreeListRow, WrapMode,
 };
 
 use crate::git::{ChangeKind, CommitInfo, DiffSet, FileDiff, LineKind, Repo};
 use crate::highlight::Highlighter;
 
-// --- GitHub-ish palette (hex strings used for CSS + TextTags) ----------------
-const BG: &str = "#ffffff";
-const PANEL: &str = "#f6f8fa";
-const BORDER: &str = "#d0d7de";
-const TEXT: &str = "#1f2328";
-const MUTED: &str = "#656d76";
-const ACCENT: &str = "#0969da";
-const SEL: &str = "#ddf4ff";
-const ADD_BG: &str = "#e6ffec";
-const ADD_MARK: &str = "#abf2bc";
-const DEL_BG: &str = "#ffebe9";
-const DEL_MARK: &str = "#ff8182";
-const ADD_FG: &str = "#1a7f37";
-const DEL_FG: &str = "#cf222e";
-const HUNK_BG: &str = "#ddf4ff";
+// --- GitHub palette (light + dark); the active one is chosen at startup ------
+#[derive(Clone, Copy)]
+struct Palette {
+    bg: &'static str,
+    panel: &'static str,
+    border: &'static str,
+    text: &'static str,
+    muted: &'static str,
+    accent: &'static str,
+    sel: &'static str,
+    add_bg: &'static str,
+    del_bg: &'static str,
+    add_fg: &'static str,
+    del_fg: &'static str,
+    hunk_bg: &'static str,
+}
+
+const LIGHT: Palette = Palette {
+    bg: "#ffffff",
+    panel: "#f6f8fa",
+    border: "#d0d7de",
+    text: "#1f2328",
+    muted: "#656d76",
+    accent: "#0969da",
+    sel: "#ddf4ff",
+    add_bg: "#e6ffec",
+    del_bg: "#ffebe9",
+    add_fg: "#1a7f37",
+    del_fg: "#cf222e",
+    hunk_bg: "#ddf4ff",
+};
+
+const DARK: Palette = Palette {
+    bg: "#0d1117",
+    panel: "#161b22",
+    border: "#30363d",
+    text: "#e6edf3",
+    muted: "#8b949e",
+    accent: "#2f81f7",
+    sel: "#1f6feb",
+    add_bg: "#12261e",
+    del_bg: "#25171c",
+    add_fg: "#3fb950",
+    del_fg: "#f85149",
+    hunk_bg: "#1c2a3a",
+};
+
+thread_local! {
+    static PALETTE: std::cell::Cell<Palette> = const { std::cell::Cell::new(LIGHT) };
+}
+
+fn pal() -> Palette {
+    PALETTE.with(|p| p.get())
+}
+
+/// Resolve the desktop colour scheme. Honors GTK's `gtk-application-prefer-dark-theme`
+/// (which GTK sets from the XDG `org.freedesktop.appearance color-scheme` portal /
+/// `prefers-color-scheme`). Headless / no preference -> light.
+fn detect_dark() -> bool {
+    gtk::Settings::default()
+        .map(|s| s.is_gtk_application_prefer_dark_theme())
+        .unwrap_or(false)
+}
 
 #[derive(Clone, Copy, PartialEq)]
 enum Showing {
@@ -104,7 +153,7 @@ struct Ui {
     summary: Label,
     counts: Label,
     commit_list: ListBox,
-    file_list: ListBox,
+    file_tree: ListView,
     diff_box: GtkBox,
     diff_scroll: ScrolledWindow,
     sticky: GtkBox,
@@ -116,6 +165,10 @@ struct Ui {
 type Shared = Rc<RefCell<State>>;
 
 pub fn load_css() {
+    // Decide the scheme once and lock the active palette.
+    let dark = detect_dark();
+    PALETTE.with(|p| p.set(if dark { DARK } else { LIGHT }));
+
     let provider = CssProvider::new();
     provider.load_from_data(&css());
     if let Some(display) = gdk::Display::default() {
@@ -128,49 +181,63 @@ pub fn load_css() {
 }
 
 fn css() -> String {
+    let Palette {
+        bg,
+        panel,
+        border,
+        text,
+        muted,
+        accent,
+        sel,
+        add_fg,
+        del_fg,
+        ..
+    } = pal();
     format!(
         r#"
-        window {{ background: {BG}; color: {TEXT}; }}
-        .panel {{ background: {PANEL}; }}
-        .toolbar {{ background: {BG}; border-bottom: 1px solid {BORDER}; padding: 4px 8px; }}
-        .section-title {{ color: {MUTED}; font-size: 10px; font-weight: bold; padding: 6px 8px 2px 8px; }}
-        .summary {{ font-family: monospace; font-weight: bold; color: {TEXT}; }}
-        .add-fg {{ color: {ADD_FG}; font-weight: bold; }}
-        .del-fg {{ color: {DEL_FG}; font-weight: bold; }}
-        .muted {{ color: {MUTED}; }}
-        .accent {{ color: {ACCENT}; font-family: monospace; }}
+        window {{ background: {bg}; color: {text}; }}
+        .panel {{ background: {panel}; }}
+        .toolbar {{ background: {panel}; border-bottom: 1px solid {border}; padding: 5px 8px; }}
+        .section-title {{ color: {muted}; font-size: 10px; font-weight: bold; padding: 6px 8px 2px 8px; }}
+        .summary {{ font-family: monospace; font-weight: bold; color: {text}; }}
+        .add-fg {{ color: {add_fg}; font-weight: bold; }}
+        .del-fg {{ color: {del_fg}; font-weight: bold; }}
+        .muted {{ color: {muted}; }}
+        .accent {{ color: {accent}; font-family: monospace; }}
 
-        .tool {{ padding: 2px 8px; min-height: 0; font-family: monospace; }}
-        .tool:checked {{ background: {SEL}; color: {ACCENT}; }}
+        .tool {{ padding: 2px 8px; min-height: 0; font-family: monospace; border: 1px solid {border}; background: {bg}; }}
+        .tool:checked {{ background: {sel}; color: {accent}; }}
 
-        .commit-row {{ padding: 5px 8px; border-bottom: 1px solid {BORDER}; }}
-        .commit-row.current {{ background: {SEL}; }}
+        .commit-row {{ padding: 5px 8px; border-bottom: 1px solid {border}; }}
+        .commit-row.current {{ background: {sel}; }}
         .endpoint {{ padding: 0 5px; min-height: 0; min-width: 0; font-size: 10px; }}
-        .endpoint:checked {{ background: {ACCENT}; color: white; }}
-        .title {{ color: {TEXT}; }}
+        .endpoint:checked {{ background: {accent}; color: white; }}
+        .title {{ color: {text}; }}
 
-        .file-row {{ padding: 4px 8px; }}
-        .file-row:hover {{ background: {SEL}; }}
+        .tree-row {{ padding: 2px 4px; }}
+        .tree-row:hover {{ background: {sel}; }}
 
         .file-header {{
-            background: {PANEL};
-            border: 1px solid {BORDER};
+            background: {panel};
+            border: 1px solid {border};
             padding: 6px 10px;
         }}
-        .file-header .path {{ font-weight: bold; color: {TEXT}; }}
-        .sticky {{ background: {PANEL}; border: 1px solid {BORDER}; padding: 6px 10px; }}
+        .file-header .path {{ font-weight: bold; color: {text}; }}
+        .sticky {{ background: {panel}; border: 1px solid {border}; padding: 6px 10px; }}
 
         .commit-msg {{
-            background: {PANEL};
-            border: 1px solid {BORDER};
+            background: {panel};
+            border: 1px solid {border};
             padding: 12px;
         }}
-        .commit-msg .heading {{ font-size: 16px; font-weight: bold; color: {TEXT}; }}
-        .commit-msg .body {{ font-family: monospace; color: {TEXT}; }}
+        .commit-msg .heading {{ font-size: 16px; font-weight: bold; color: {text}; }}
+        .commit-msg .body {{ font-family: monospace; color: {text}; }}
 
-        textview {{ background: {BG}; color: {TEXT}; }}
-        textview text {{ background: {BG}; }}
-        .binary {{ color: {MUTED}; font-style: italic; padding: 6px 12px; }}
+        textview {{ background: {bg}; color: {text}; }}
+        textview text {{ background: {bg}; }}
+        listview {{ background: {panel}; }}
+        listview > row {{ background: transparent; }}
+        .binary {{ color: {muted}; font-style: italic; padding: 6px 12px; }}
         "#
     )
 }
@@ -243,11 +310,12 @@ pub fn build_ui(app: &Application, repo: Repo) {
     let file_title = Label::new(Some("FILES"));
     file_title.set_xalign(0.0);
     file_title.add_css_class("section-title");
-    let file_list = ListBox::new();
-    file_list.set_selection_mode(SelectionMode::None);
+
+    // Real hierarchical file tree: GtkTreeListModel + GtkListView with expanders.
+    let file_tree = build_file_tree_view();
     let file_scroll = ScrolledWindow::new();
     file_scroll.set_policy(PolicyType::Never, PolicyType::Automatic);
-    file_scroll.set_child(Some(&file_list));
+    file_scroll.set_child(Some(&file_tree));
     file_scroll.set_vexpand(true);
     let file_pane = GtkBox::new(Orientation::Vertical, 0);
     file_pane.add_css_class("panel");
@@ -289,7 +357,6 @@ pub fn build_ui(app: &Application, repo: Repo) {
     overlay.add_overlay(&sticky);
 
     let main_box = GtkBox::new(Orientation::Vertical, 0);
-    main_box.append(&toolbar);
     main_box.append(&overlay);
 
     // --- Outer horizontal Paned (side panel | main) ------------------------
@@ -301,26 +368,36 @@ pub fn build_ui(app: &Application, repo: Repo) {
     outer.set_resize_end_child(true);
     outer.set_shrink_start_child(false);
     outer.set_wide_handle(true);
+    outer.set_vexpand(true);
+
+    // --- Window: full-width toolbar on TOP, then the [side | main] paned ----
+    let root = GtkBox::new(Orientation::Vertical, 0);
+    root.append(&toolbar);
+    root.append(&outer);
 
     let window = ApplicationWindow::builder()
         .application(app)
         .title("git-review · gtk4")
-        .default_width(1200)
-        .default_height(820)
-        .child(&outer)
+        .default_width(1280)
+        .default_height(800)
+        .child(&root)
         .build();
+    window.set_default_size(1280, 800);
 
     let ui = Rc::new(Ui {
         summary,
         counts,
         commit_list,
-        file_list,
+        file_tree: file_tree.clone(),
         diff_box,
         diff_scroll: diff_scroll.clone(),
         sticky,
         sticky_label,
         file_anchors: RefCell::new(Vec::new()),
     });
+
+    // Wire the tree-view factory now that we have the `Ui` (leaf clicks scroll the diff).
+    setup_tree_factory(&file_tree, &ui);
 
     // Build the (static) commit list once.
     build_commit_list(&ui, &shared);
@@ -545,13 +622,14 @@ fn refresh(ui: &Rc<Ui>, shared: &Shared) {
         ui.counts.set_markup("");
     } else {
         ui.summary.set_text(&s.diff.summary);
+        let p = pal();
         ui.counts.set_markup(&format!(
-            "<span foreground='{ADD_FG}'>+{}</span>  <span foreground='{DEL_FG}'>−{}</span>",
-            s.diff.added, s.diff.removed
+            "<span foreground='{}'>+{}</span>  <span foreground='{}'>−{}</span>",
+            p.add_fg, s.diff.added, p.del_fg, s.diff.removed
         ));
     }
 
-    rebuild_file_list(ui, &s);
+    rebuild_file_tree(ui, &s);
     rebuild_diff(ui, &s);
     drop(s);
 
@@ -559,43 +637,166 @@ fn refresh(ui: &Rc<Ui>, shared: &Shared) {
     ui.sticky.set_visible(false);
 }
 
-fn rebuild_file_list(ui: &Rc<Ui>, s: &State) {
-    while let Some(child) = ui.file_list.first_child() {
-        ui.file_list.remove(&child);
-    }
-    for (i, f) in s.diff.files.iter().enumerate() {
-        let row = ListBoxRow::new();
-        row.set_selectable(false);
-        let hbox = GtkBox::new(Orientation::Horizontal, 6);
-        hbox.add_css_class("file-row");
+// --- File tree (real hierarchy via GtkTreeListModel + GtkListView) ----------
 
-        let icon = Label::new(Some(file_icon(&f.path)));
-        hbox.append(&icon);
-        let path = Label::new(Some(&f.path));
-        path.set_ellipsize(pango::EllipsizeMode::Start);
-        path.set_xalign(0.0);
-        path.set_hexpand(true);
-        hbox.append(&path);
+/// A plain in-memory tree built from the flat `FileDiff` list. Directory chains with a single
+/// child are collapsed GitHub-style (e.g. `a/b/c.rs` becomes one folder `a/b`).
+#[derive(Default)]
+struct TreeBuild {
+    /// children of this node, keyed by the next path segment
+    dirs: std::collections::BTreeMap<String, TreeBuild>,
+    /// (segment label, file index) for leaf files directly under this node
+    files: Vec<(String, usize)>,
+}
 
-        let plus = Label::new(None);
-        plus.set_markup(&format!("<span foreground='{ADD_FG}'>+{}</span>", f.added));
-        hbox.append(&plus);
-        let minus = Label::new(None);
-        minus.set_markup(&format!("<span foreground='{DEL_FG}'>−{}</span>", f.removed));
-        hbox.append(&minus);
-
-        row.set_child(Some(&hbox));
-
-        // Click scrolls the diff to this file.
-        let gesture = gtk::GestureClick::new();
-        {
-            let ui = ui.clone();
-            gesture.connect_released(move |_, _, _, _| scroll_to_file(&ui, i));
+fn build_tree(files: &[FileDiff]) -> TreeBuild {
+    let mut root = TreeBuild::default();
+    for (i, f) in files.iter().enumerate() {
+        let parts: Vec<&str> = f.path.split('/').collect();
+        let mut node = &mut root;
+        for seg in &parts[..parts.len() - 1] {
+            node = node.dirs.entry(seg.to_string()).or_default();
         }
-        hbox.add_controller(gesture);
-
-        ui.file_list.append(&row);
+        let leaf = parts.last().copied().unwrap_or(&f.path);
+        node.files.push((leaf.to_string(), i));
     }
+    root
+}
+
+/// Flatten one tree node into `FileNode` GObjects, collapsing single-child dir chains.
+fn node_to_objects(prefix: &str, build: &TreeBuild, files: &[FileDiff]) -> Vec<node::FileNode> {
+    let mut out = Vec::new();
+    for (name, sub) in &build.dirs {
+        // Collapse single-child directory chains: keep descending while this dir has exactly
+        // one directory child and no file leaves.
+        let mut label = name.clone();
+        let mut cur = sub;
+        while cur.files.is_empty() && cur.dirs.len() == 1 {
+            let (n, s) = cur.dirs.iter().next().unwrap();
+            label = format!("{label}/{n}");
+            cur = s;
+        }
+        let full = if prefix.is_empty() {
+            label.clone()
+        } else {
+            format!("{prefix}/{label}")
+        };
+        let dir_node = node::FileNode::new_dir(&label);
+        let children = node_to_objects(&full, cur, files);
+        dir_node.set_children(children);
+        out.push(dir_node);
+    }
+    for (name, idx) in &build.files {
+        let f = &files[*idx];
+        out.push(node::FileNode::new_file(name, *idx, f.added, f.removed, file_icon(&f.path)));
+    }
+    out
+}
+
+/// Create the empty ListView; the model is (re)attached in `rebuild_file_tree`.
+fn build_file_tree_view() -> ListView {
+    let view = ListView::new(None::<SingleSelection>, None::<SignalListItemFactory>);
+    view.add_css_class("panel");
+    view.set_vexpand(true);
+    view
+}
+
+/// Install the item factory (rows: expander + icon + name + counts). Separated so it can
+/// capture the `Ui` for leaf-click scroll-to-file.
+fn setup_tree_factory(view: &ListView, ui: &Rc<Ui>) {
+    let factory = SignalListItemFactory::new();
+    factory.connect_setup(move |_, item| {
+        let item = item.downcast_ref::<gtk::ListItem>().unwrap();
+        let expander = TreeExpander::new();
+        let row = GtkBox::new(Orientation::Horizontal, 6);
+        row.add_css_class("tree-row");
+        let icon = Label::new(None);
+        let name = Label::new(None);
+        name.set_xalign(0.0);
+        name.set_ellipsize(pango::EllipsizeMode::Middle);
+        name.set_hexpand(true);
+        let counts = Label::new(None);
+        counts.set_use_markup(true);
+        row.append(&icon);
+        row.append(&name);
+        row.append(&counts);
+        expander.set_child(Some(&row));
+        item.set_child(Some(&expander));
+    });
+    {
+        factory.connect_bind(move |_, item| {
+            let item = item.downcast_ref::<gtk::ListItem>().unwrap();
+            let row = item.item().and_downcast::<TreeListRow>().unwrap();
+            let node = row.item().and_downcast::<node::FileNode>().unwrap();
+            let expander = item.child().and_downcast::<TreeExpander>().unwrap();
+            expander.set_list_row(Some(&row));
+            let hbox = expander.child().and_downcast::<GtkBox>().unwrap();
+            let icon = hbox.first_child().and_downcast::<Label>().unwrap();
+            let name = icon.next_sibling().and_downcast::<Label>().unwrap();
+            let counts = name.next_sibling().and_downcast::<Label>().unwrap();
+
+            if node.is_dir() {
+                icon.set_text("📁");
+                name.set_text(&node.name());
+                counts.set_markup("");
+            } else {
+                icon.set_text(&node.icon());
+                name.set_text(&node.name());
+                let p = pal();
+                counts.set_markup(&format!(
+                    "<span foreground='{}'>+{}</span> <span foreground='{}'>−{}</span>",
+                    p.add_fg,
+                    node.added(),
+                    p.del_fg,
+                    node.removed()
+                ));
+            }
+        });
+    }
+    view.set_factory(Some(&factory));
+
+    // Activating a row: leaf -> scroll diff; folder -> toggle expansion.
+    let ui = ui.clone();
+    view.connect_activate(move |view, pos| {
+        let model = view.model().unwrap();
+        if let Some(row) = model.item(pos).and_downcast::<TreeListRow>() {
+            if let Some(node) = row.item().and_downcast::<node::FileNode>() {
+                if node.is_dir() {
+                    row.set_expanded(!row.is_expanded());
+                } else {
+                    scroll_to_file(&ui, node.index() as usize);
+                }
+            }
+        }
+    });
+}
+
+fn rebuild_file_tree(ui: &Rc<Ui>, s: &State) {
+    let build = build_tree(&s.diff.files);
+    let roots = node_to_objects("", &build, &s.diff.files);
+
+    let root_model = gio::ListStore::new::<node::FileNode>();
+    for n in roots {
+        root_model.append(&n);
+    }
+
+    let tree_model = TreeListModel::new(root_model, false, true, |obj| {
+        let node = obj.downcast_ref::<node::FileNode>().unwrap();
+        if node.is_dir() {
+            let store = gio::ListStore::new::<node::FileNode>();
+            for c in node.children() {
+                store.append(&c);
+            }
+            Some(store.upcast())
+        } else {
+            None
+        }
+    });
+
+    let selection = SingleSelection::new(Some(tree_model));
+    selection.set_autoselect(false);
+    selection.set_can_unselect(true);
+    ui.file_tree.set_model(Some(&selection));
 }
 
 fn rebuild_diff(ui: &Rc<Ui>, s: &State) {
@@ -692,10 +893,10 @@ fn file_header_widget(f: &FileDiff) -> GtkBox {
     header.append(&spacer);
 
     let plus = Label::new(None);
-    plus.set_markup(&format!("<span foreground='{ADD_FG}'>+{}</span>", f.added));
+    plus.set_markup(&format!("<span foreground='{}'>+{}</span>", pal().add_fg, f.added));
     header.append(&plus);
     let minus = Label::new(None);
-    minus.set_markup(&format!("<span foreground='{DEL_FG}'>−{}</span>", f.removed));
+    minus.set_markup(&format!("<span foreground='{}'>−{}</span>", pal().del_fg, f.removed));
     header.append(&minus);
 
     header
@@ -813,22 +1014,23 @@ fn make_tags(buffer: &TextBuffer) -> Tags {
         table.add(&t);
         t
     };
+    let p = pal();
     let hunk = mk("hunk");
-    hunk.set_paragraph_background(Some(HUNK_BG));
-    hunk.set_foreground(Some(MUTED));
+    hunk.set_paragraph_background(Some(p.hunk_bg));
+    hunk.set_foreground(Some(p.muted));
 
     let add_bg = mk("add_bg");
-    add_bg.set_paragraph_background(Some(ADD_BG));
+    add_bg.set_paragraph_background(Some(p.add_bg));
     let del_bg = mk("del_bg");
-    del_bg.set_paragraph_background(Some(DEL_BG));
+    del_bg.set_paragraph_background(Some(p.del_bg));
 
     let add_fg = mk("add_fg");
-    add_fg.set_foreground(Some(ADD_FG));
+    add_fg.set_foreground(Some(p.add_fg));
     let del_fg = mk("del_fg");
-    del_fg.set_foreground(Some(DEL_FG));
+    del_fg.set_foreground(Some(p.del_fg));
 
     let muted = mk("muted");
-    muted.set_foreground(Some(MUTED));
+    muted.set_foreground(Some(p.muted));
 
     Tags {
         hunk,
@@ -938,11 +1140,14 @@ fn update_sticky(ui: &Rc<Ui>, shared: &Shared, scroll_y: f64) {
                 (Some(old), ChangeKind::Renamed) => format!("{old}  →  {}", f.path),
                 _ => f.path.clone(),
             };
+            let p = pal();
             ui.sticky_label.set_markup(&format!(
-                "{}  <span weight='bold'>{}</span>   <span foreground='{ADD_FG}'>+{}</span> <span foreground='{DEL_FG}'>−{}</span>",
+                "{}  <span weight='bold'>{}</span>   <span foreground='{}'>+{}</span> <span foreground='{}'>−{}</span>",
                 file_icon(&f.path),
                 glib::markup_escape_text(&label),
+                p.add_fg,
                 f.added,
+                p.del_fg,
                 f.removed
             ));
             ui.sticky.set_visible(true);
@@ -993,5 +1198,84 @@ fn empty_diff() -> DiffSet {
         added: 0,
         removed: 0,
         summary: String::new(),
+    }
+}
+
+/// `FileNode`: the GObject model item backing each row of the file tree. A node is either a
+/// directory (has `children`) or a file leaf (carries `index`, `added`, `removed`, `icon`).
+mod node {
+    use std::cell::RefCell;
+
+    use gtk::glib;
+    use gtk::subclass::prelude::*;
+
+    #[derive(Default)]
+    pub struct FileNodeInner {
+        pub name: RefCell<String>,
+        pub icon: RefCell<String>,
+        pub is_dir: std::cell::Cell<bool>,
+        pub index: std::cell::Cell<u32>,
+        pub added: std::cell::Cell<u32>,
+        pub removed: std::cell::Cell<u32>,
+        pub children: RefCell<Vec<super::node::FileNode>>,
+    }
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for FileNodeInner {
+        const NAME: &'static str = "GitReviewFileNode";
+        type Type = FileNode;
+    }
+
+    impl ObjectImpl for FileNodeInner {}
+
+    glib::wrapper! {
+        pub struct FileNode(ObjectSubclass<FileNodeInner>);
+    }
+
+    impl FileNode {
+        pub fn new_dir(name: &str) -> Self {
+            let obj: Self = glib::Object::new();
+            let inner = obj.imp();
+            *inner.name.borrow_mut() = name.to_string();
+            inner.is_dir.set(true);
+            obj
+        }
+
+        pub fn new_file(name: &str, index: usize, added: u32, removed: u32, icon: &str) -> Self {
+            let obj: Self = glib::Object::new();
+            let inner = obj.imp();
+            *inner.name.borrow_mut() = name.to_string();
+            *inner.icon.borrow_mut() = icon.to_string();
+            inner.is_dir.set(false);
+            inner.index.set(index as u32);
+            inner.added.set(added);
+            inner.removed.set(removed);
+            obj
+        }
+
+        pub fn is_dir(&self) -> bool {
+            self.imp().is_dir.get()
+        }
+        pub fn name(&self) -> String {
+            self.imp().name.borrow().clone()
+        }
+        pub fn icon(&self) -> String {
+            self.imp().icon.borrow().clone()
+        }
+        pub fn index(&self) -> u32 {
+            self.imp().index.get()
+        }
+        pub fn added(&self) -> u32 {
+            self.imp().added.get()
+        }
+        pub fn removed(&self) -> u32 {
+            self.imp().removed.get()
+        }
+        pub fn children(&self) -> Vec<FileNode> {
+            self.imp().children.borrow().clone()
+        }
+        pub fn set_children(&self, children: Vec<FileNode>) {
+            *self.imp().children.borrow_mut() = children;
+        }
     }
 }
