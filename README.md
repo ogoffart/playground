@@ -49,37 +49,70 @@ tools/make-sample-repo.sh            # creates /tmp/git-review-sample
 egui/target/debug/git-review-egui /tmp/git-review-sample
 ```
 
-## Status
+## Comparison
 
-Apps are landed one framework at a time, each build-verified and smoke-tested headless
-(`xvfb` + a screenshot against the sample repo). See each folder's `README.md` and
-`screenshot.png` for details.
+All 14 are implemented, polished to the same [`SPEC.md`](./SPEC.md) (full-width top toolbar, real
+hierarchical file tree, per-file +/− counts, system light/dark theme), and built with a
+size-optimized release profile (`opt-level="z"`, `lto`, `codegen-units=1`, `panic="abort"`,
+`strip`). Each was build-verified and smoke-tested headless; 12 have a fresh border-free
+`screenshot.png`. Every app shares the same 463-line `git2`+`syntect` data layer (`git.rs` +
+`highlight.rs`); the LOC column below is the **framework-specific UI code on top of that**.
 
-All 14 are implemented and build-verified. 12 were captured rendering headless (see each folder's
-`screenshot.png`); the two exceptions are noted below and are environment limitations of this
-headless/no-GPU container, not app bugs.
+### Size, code & build
 
-| Framework | Build | Headless render | Notes |
-|---|---|---|---|
-| egui | ✅ | ✅ shot | immediate-mode; hand-laid diff rows, overlay sticky header |
-| gtk4 | ✅ | ✅ shot | `GtkPaned` splits, TextView/TextTag diff, overlay sticky |
-| slint | ✅ | ✅ shot | declarative markup, draggable splitters, Flickable + floating sticky |
-| iced | ✅ | ✅ shot | `pane_grid` splits, `rich_text` spans, overlay sticky |
-| qt-qmetaobject | ✅ | ✅ shot | QML `SplitView`, `ListView` sections = **true** sticky headers |
-| tauri | ✅ | ✅ shot | web frontend, CSS `position: sticky`, collapsible file tree |
-| dioxus | ✅ | ✅ shot | RSX + CSS sticky headers; libxdo link stub for headless |
-| floem | ✅ | ✅ shot | reactive signals, draggable splitters, lavapipe render |
-| qt-cxx | ✅ | ✅ shot | cxx-qt bridge; same QML as qmetaobject (clean A/B) |
-| qt-widgets | ✅ | ✅ shot | **native QtWidgets** via a C++ shim + C-ABI (no QML/moc) |
-| xilem | ✅ | ✅ shot | alpha (Masonry/Vello); one label per span; lavapipe render |
-| makepad | ✅ | ⚠ layout only | `live_design!` DSL, `Splitter`+`PortalList`, custom `DiffRow`; text glyphs don't paint under software GL (llvmpipe) |
-| gpui | ✅ | ⚠ no capture | Zed's framework; runs on Vulkan (lavapipe) but the swapchain present path isn't screen-capturable headless |
-| freya | ✅ | ✅ shot | Skia + own reactive core; builder API; lavapipe render |
+| Framework | Release binary | Compressed (gzip) | UI LOC | Runtime deps (not in binary) |
+|---|--:|--:|--:|---|
+| **qt-qmetaobject** | 2.5 MiB | 1.55 MiB | 952 | Qt 6 + QtQuick QML modules |
+| **qt-widgets** | 2.5 MiB | 1.56 MiB | 1225 | Qt 6 |
+| **gtk4** | 2.5 MiB | 1.56 MiB | 1321 | GTK 4 + GtkSourceView 5 |
+| **qt-cxx** | 3.2 MiB | 1.72 MiB | 1074 | Qt 6 + QtQuick QML modules |
+| **tauri** | 5.2 MiB | 2.58 MiB | 1329 | webkit2gtk-4.1 + system webview |
+| **dioxus** | 6.0 MiB | 2.61 MiB | 1385 | webkit2gtk-4.1 |
+| **makepad** | 6.8 MiB | 3.26 MiB | 1236 | GL driver only (self-contained) |
+| **egui** | 9.1 MiB | 4.24 MiB | 991 | GL driver only (self-contained) |
+| **iced** | 9.9 MiB | 4.65 MiB | 1139 | GPU/GL driver (self-contained) |
+| **gpui** | 10.5 MiB | 4.93 MiB | 1336 | Vulkan (self-contained) |
+| **slint** | 10.6 MiB | 4.89 MiB | 1274 | GPU/GL driver (self-contained) |
+| **floem** | 11.3 MiB | 5.25 MiB | 1239 | GPU/GL driver (self-contained) |
+| **freya** | 23.3 MiB | 10.4 MiB | 1404 | GPU/GL driver (self-contained, bundles Skia) |
+| **xilem** | 27.4 MiB | 9.6 MiB | 1185 | Vulkan (self-contained, bundles Vello) |
 
-All native apps build `git2`'s vendored libgit2 (needs `cmake` + a C compiler). The three Qt apps
-need Qt 6 (+ the QtQuick QML modules for the two QML ones); the GTK app needs GTK 4; the web apps
-(tauri, dioxus) need webkit2gtk; the wgpu/GL apps render headless via Mesa **lavapipe** (software
-Vulkan) or `LIBGL_ALWAYS_SOFTWARE=1`.
+> **Reading the sizes fairly:** the small binaries (Qt, GTK, web) are *not* actually smaller to
+> ship — they dynamically link a large toolkit the user must already have (or you bundle it:
+> Qt 6 ≈ 30–80 MB, GTK 4 ≈ 40 MB, a webview is usually system-provided). The self-contained
+> Rust-renderer apps statically link everything (font shaping, GPU abstraction, and for freya a
+> whole copy of Skia, for xilem all of Vello), so their binary *is* the shippable artifact. So
+> "smallest binary" and "smallest real download" are nearly opposite rankings.
+
+### Spec coverage, ergonomics & score
+
+| Framework | Notable framework-specific limitations | Ease of use (building this app) | Score |
+|---|---|---|:--:|
+| **tauri** | per-file sticky is per-section CSS (visually GitHub-identical) | Easiest to nail the GitHub look — plain HTML/CSS/JS over a thin Rust IPC layer; `position:sticky`, flexbox, collapsible tree all trivial. Needs a JS/webview mental model. | **9.0** |
+| **qt-qmetaobject** | syntect theme stays light in dark mode (chrome switches) | Very productive: `qt_property!`/`qt_method!` macros + model-as-JSON; QML gives `SplitView` resize and `ListView` **section** sticky headers for free. Qt 6 dependency. | **8.5** |
+| **gtk4** | sticky is an overlay label, not an in-flow pinned header | The most "batteries included": real `GtkPaned`, `TreeListModel` tree, `GtkSourceView`. gtk4-rs is mature but verbose, and the build needs system GTK. | **8.0** |
+| **egui** | sticky header emulated as a redrawn overlay | Immediate-mode is quick to reason about; resizable panels are one call. The diff rows are hand-painted (`Painter`), which is flexible but lower-level than a retained tree. | **8.0** |
+| **slint** | flat model ⇒ tree flattened in Rust; syntect light in dark | Clean declarative `.slint` markup; the `Theme` global + `Palette.color-scheme` made dark mode tidy. No splitter/tree widgets, so those are hand-rolled. | **8.0** |
+| **iced** | no native sticky/tree widgets (overlay + manual tree) | Elm architecture is predictable and `pane_grid` handles resizing; rich-text spans map cleanly. Some boilerplate and estimated scroll geometry. | **7.5** |
+| **dioxus** | syntect light in dark mode; needs a `libxdo` link stub headless | RSX + CSS felt like comfortable web dev, all in Rust, with signals; the recursive tree was natural. Transitive `libxdo`/tray deps are an annoyance. | **7.5** |
+| **floem** | no sticky primitive (headers scroll inline) | Fine-grained signals made the collapsible tree and theme refactor pleasant; closure-based styling means threading a palette through many closures. | **7.5** |
+| **qt-cxx** | syntect light in dark; long, finicky build | `#[cxx_qt::bridge]` is clean once set up; reused the qmetaobject QML verbatim. The CXX/Pin borrow dance and ~6-min LTO builds are the cost. | **7.0** |
+| **qt-widgets** | sticky not pinned (stacked `QTextEdit`s); rich text via HTML | Predictable QtWidgets via a C++ shim + C-ABI; top toolbar is free in `QMainWindow`. Colored text/counts need HTML, and you maintain the FFI/JSON boundary. | **7.0** |
+| **freya** | no sticky / scroll-into-view (pixel-offset approximations); 23 MB binary | Nice builder API — `ResizableContainer` and tooltips are free, `paragraph().span()` eats syntect spans directly. Skia-from-source is a heavy build & binary. | **7.0** |
+| **gpui** | sticky not expressible in one `uniform_list`; **no headless screenshot** (Vulkan swapchain) | Ergonomic tailwind-ish `div()` once you accept the retained model; but few batteries (no splitter/tooltip/sticky widgets) and a git dependency. | **6.5** |
+| **makepad** | word-wrap clips; sticky not pinned; **text doesn't paint under software GL** | Powerful shader/`live_design!` DSL with real `Splitter`+`PortalList`, but the steepest learning curve and the most custom drawing (a whole custom `DiffRow` widget). | **5.5** |
+| **xilem** | alpha API sharp edges; one label per span; no scroll-to-child; flaky headless capture | Promising reactive design, but it's alpha: `Style`-vs-inherent method ordering, `Send+Sync` state (Repo behind a `Mutex`), and a thin widget set mean more friction today. | **5.5** |
+
+*Scores are a subjective blend of spec completeness, how GitHub-like the result looks, ergonomics,
+maturity, and shippability for **this** app — not a general verdict on the frameworks.*
+
+### Headless-render caveats (this container only)
+
+- **makepad** builds and lays out (toolbar, splitters, tree all visible) but its GPU SDF text pass
+  doesn't paint under Mesa llvmpipe — glyphs are blank in the capture; fine on a real GPU.
+- **gpui** and **xilem** render through Vulkan swapchains (Blade / Vello); under software Vulkan
+  (lavapipe) the presented frames aren't reliably grabbable by X11 tools, so their screenshots may
+  be absent or not reflect the latest UI. Both build and run correctly.
 
 ### Other Rust UI frameworks not included
 
