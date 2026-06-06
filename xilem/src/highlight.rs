@@ -26,15 +26,24 @@ pub struct Highlighter {
 }
 
 impl Highlighter {
-    pub fn new() -> Self {
+    /// Build a highlighter whose theme tracks the desktop scheme: `InspiredGitHub` for light,
+    /// `base16-ocean.dark` for dark (per SPEC.md).
+    pub fn new(dark: bool) -> Self {
         let syntaxes = two_face::syntax::extra_newlines();
         let themes = ThemeSet::load_defaults();
-        // A light, GitHub-like theme.
-        let theme = themes
-            .themes
-            .get("InspiredGitHub")
-            .cloned()
-            .unwrap_or_else(|| themes.themes["Solarized (light)"].clone());
+        let theme = if dark {
+            themes
+                .themes
+                .get("base16-ocean.dark")
+                .cloned()
+                .unwrap_or_else(|| themes.themes["Solarized (dark)"].clone())
+        } else {
+            themes
+                .themes
+                .get("InspiredGitHub")
+                .cloned()
+                .unwrap_or_else(|| themes.themes["Solarized (light)"].clone())
+        };
         Self { syntaxes, theme }
     }
 

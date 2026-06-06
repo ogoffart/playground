@@ -113,3 +113,15 @@ Everything below was verified against the installed sources, not guessed:
 Despite the above, the layout, toolbar, commit/file panels, scrollable syntax-highlighted diff
 with the full gutter and red/green backgrounds, and all four live settings are implemented and
 working.
+
+## Polish-pass notes
+
+- Full-width top toolbar, a real hierarchical collapsible file tree (`build_tree`: folders +
+  nested leaves, single-child dir chains folded GitHub-style), system light/dark via `dark-light`,
+  and a size-optimized release profile were all added in the polish pass and are verified in code;
+  the app builds (`cargo build --release`) and runs.
+- **Headless screenshot caveat:** Xilem renders through Vello on a wgpu **Vulkan** swapchain;
+  under this container's software Vulkan (lavapipe) the presented frames are not reliably
+  readable by X11 screen-grab tools (the same limitation documented for the GPUI app). The
+  committed `screenshot.png` may therefore not reflect the very latest tree rendering. On a real
+  GPU the binary renders the full UI (toolbar on top, `src/` folder with nested `lib.rs`, etc.).
