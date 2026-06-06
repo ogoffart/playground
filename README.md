@@ -167,3 +167,32 @@ maturity, and shippability for **this** app — not a general verdict on the fra
 Beyond the 14 above, the remaining notable Rust GUI options are either superseded or niche:
 **Druid** (deprecated, succeeded by Xilem), **Vizia**, **Cushy**, **Ribir**, and **Bevy UI**
 (game-engine UI). Any of these could be added following the same `SPEC.md` contract.
+
+## Recommendation
+
+Having built the same non-trivial app in all of them, here's what I'd actually reach for, by
+situation. If you want a **content-heavy, GitHub-style app and a polished look with the least
+effort**, use **Tauri** — CSS gives you sticky headers, theming and layout almost for free; just
+accept the system WebView dependency and a large fully-bundled size. If you'd rather **stay 100%
+Rust** with that same web-style ergonomics, **Dioxus** is the same idea without a JS layer. For a
+**genuinely native desktop app** where the toolkit is expected to already be installed (Linux
+distros, internal tools), the **Qt** and **GTK** bindings are the strongest: **qt-qmetaobject**
+(or **cxx-qt**) gives you resizable splits and true sticky headers from QML essentially for free
+and the smallest binaries, **gtk4** is the most batteries-included (real tree, `GtkSourceView`),
+and **qt-widgets** is the most predictable classic-desktop option — the trade-off for all three is
+a heavy toolkit to ship/depend on and a non-pure-Rust build.
+
+If you want **one self-contained binary that depends on nothing but the GPU/X stack**, the
+pure-Rust renderers win: **Slint** is my pick for a *designed*, declarative UI with clean
+light/dark theming and a modest footprint; **egui** is unbeatable for **speed of development** and
+tools/debug UIs (immediate-mode, tiny mental model) as long as you don't need a pixel-perfect
+"designed" look; **iced** sits between them with a predictable Elm architecture; and **floem** is
+the one to watch if you like fine-grained reactivity. I'd treat **gpui, xilem, makepad and freya**
+as **forward-looking choices** today — each is impressive (gpui powers Zed, xilem is Linebender's
+next-gen architecture, makepad's shader DSL is the fastest, freya's Skia text is the crispest) but
+they're pre-1.0 / unpublished / heaviest-to-ship, so pick them for a bet on the future rather than
+a deadline.
+
+**Short version:** Tauri or Dioxus for fastest polish; Qt or GTK for native-with-batteries and the
+smallest binaries; Slint or egui for a self-contained, dependency-light Rust app; the rest when
+you're optimizing for the future rather than for shipping today.
