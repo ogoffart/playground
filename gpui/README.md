@@ -40,17 +40,28 @@ GPUI is a retained, editor-oriented framework: a tailwind-ish `div()` flex build
 an `Entity<T>` whose `Render::render` rebuilds the element tree, and `uniform_list` for
 virtualized lists. The mapping:
 
-- **Layout** — the root is a horizontal flex (`div().flex().flex_row()`): side panel, a
-  draggable splitter, then the main column (`toolbar` + scrollable diff). The side panel is a
+- **Layout** — the root is a **vertical** flex (`div().flex().flex_col()`): a single
+  **full-width toolbar pinned at the very top** (distinct background + bottom border), then a
+  horizontal-flex body of `side panel | draggable splitter | main diff view`. The side panel is a
   vertical flex of commit-list / splitter / file-tree.
 - **Resizable panels** — GPUI has no built-in splitter, so each splitter is a thin `div` with a
   resize cursor and an `on_mouse_down` that arms a drag. While dragging, the root installs
-  `on_mouse_move`/`on_mouse_up` listeners that update `side_width` / `commits_height` (clamped),
-  and `cx.notify()` re-renders. Widths/heights are stored as `Pixels` on the entity.
-- **Commit list / file tree** — `uniform_list(id, count, cx.processor(...))` with a
+  `on_mouse_move`/`on_mouse_up` listeners that update `side_width` / `commits_height` (clamped;
+  the vertical drag subtracts the toolbar height since the body starts below it), and
+  `cx.notify()` re-renders. Widths/heights are stored as `Pixels` on the entity.
+- **Commit list** — `uniform_list(id, count, cx.processor(...))` with a
   `UniformListScrollHandle`, so only visible rows are built. Two-line commit rows, the synthetic
   "working tree" row, `[from]`/`[to]` endpoint buttons, current-row highlight, and click-to-open
   are all plain `div`s with `.on_click(cx.listener(...))`.
+- **File tree** — a **real hierarchical tree**, not a flat list. The diff's paths are folded into
+  a folder/leaf forest (`insert_path`), single-child directory chains are collapsed GitHub-style
+  (`collapse_chain`, e.g. `a/b/c.rs`), folders sort before files. The forest is flattened (honoring
+  a per-folder collapsed-key set; folders are expanded by default) into indented `uniform_list`
+  rows: folders show a disclosure arrow (▾/▸) + folder icon and toggle on click; leaves show a
+  file-type icon + name + `+a −r` counts and scroll the diff to that file on click.
+- **Theme** — both GitHub palettes (light/dark, per SPEC.md) are held in a `Theme` struct and
+  picked at startup from the OS preference via the **`dark-light`** crate, defaulting to **light**
+  when unspecified (headless). `GIT_REVIEW_THEME=light|dark` overrides detection.
 - **Toolbar** — summary (`git show <sha>` / `git diff a b`) with green/red aggregate counts on
   the left; the five tool buttons (`⤶`, `␣`, `A-`, `A+`, `#`) on the right, each a `div` that
   looks pressed (`bg`/`accent`) when active and carries a tooltip.
