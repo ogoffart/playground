@@ -1,5 +1,6 @@
 /* GitHub-familiar light theme for git-review (Dioxus desktop / webview). */
 
+/* GitHub light palette (default; headless environments default to light). */
 :root {
   --bg: #ffffff;
   --panel: #f6f8fa;
@@ -15,6 +16,37 @@
   --add-fg: #1a7f37;
   --del-fg: #cf222e;
   --hunk-bg: #ddf4ff;
+  --btn-hover: #eaeef2;
+  --tree-hover: rgba(9, 105, 218, 0.08);
+  --scrollbar: #c1c8d0;
+  /* code-span backdrop so syntect's light syntax colours stay legible */
+  --code-bg: #ffffff;
+}
+
+/* GitHub dark palette — follows the desktop colour scheme. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #2f81f7;
+    --sel: #1f6feb;
+    --add-bg: #12261e;
+    --add-mark: #2ea043;
+    --del-bg: #25171c;
+    --del-mark: #f85149;
+    --add-fg: #3fb950;
+    --del-fg: #f85149;
+    --hunk-bg: #1f2937;
+    --btn-hover: #21262d;
+    --tree-hover: rgba(47, 129, 247, 0.15);
+    --scrollbar: #484f58;
+    /* syntect keeps the InspiredGitHub (light) palette, so code rows get a light
+       backdrop in dark mode to remain readable. See README "Limitations". */
+    --code-bg: #f6f8fa;
+  }
 }
 
 * {
@@ -36,9 +68,18 @@ html, body {
 
 .root {
   display: flex;
-  flex-direction: row;
+  flex-direction: column;
   height: 100vh;
   width: 100vw;
+}
+
+/* below the full-width toolbar: side panel + main view side by side */
+.body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: row;
+  min-height: 0;
+  overflow: hidden;
 }
 
 /* ===== left side panel ===== */
@@ -171,16 +212,35 @@ html, body {
 .cr-title:hover { color: var(--accent); }
 
 /* ===== file tree ===== */
-.file-row {
+.tree-row {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 3px 10px;
+  gap: 5px;
+  padding-top: 3px;
+  padding-bottom: 3px;
+  padding-right: 10px;
   font-size: 12px;
   cursor: pointer;
   white-space: nowrap;
 }
-.file-row:hover { background: rgba(9, 105, 218, 0.08); }
+.tree-row:hover { background: var(--tree-hover); }
+.tree-dir { color: var(--text); font-weight: 500; }
+.tri {
+  flex: 0 0 auto;
+  width: 12px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 9px;
+}
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.file-row:hover { background: var(--tree-hover); }
 .ficon { flex: 0 0 auto; }
 .fpath {
   overflow: hidden;
@@ -208,8 +268,11 @@ html, body {
   gap: 12px;
   padding: 6px 12px;
   border-bottom: 1px solid var(--border);
-  background: var(--bg);
+  background: var(--panel);
   flex: 0 0 auto;
+  width: 100%;
+  height: 38px;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
 }
 .summary {
   display: flex;
@@ -237,12 +300,13 @@ html, body {
   color: var(--text);
   cursor: pointer;
 }
-.tool:hover { background: var(--panel); }
+.tool:hover { background: var(--btn-hover); }
 .tool.active {
   background: var(--sel);
   border-color: var(--accent);
   color: var(--accent);
   font-weight: 700;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.15);
 }
 
 /* ===== diff body ===== */
@@ -305,6 +369,10 @@ html, body {
   font-family: var(--code-font);
   font-size: var(--diff-font);
   line-height: 1.45;
+  /* syntect emits light-theme (InspiredGitHub) colours, so the code area keeps a light
+     backdrop even in dark mode to stay legible (see README). */
+  background: var(--code-bg);
+  color: #1f2328;
 }
 
 /* one diff line */
@@ -319,6 +387,17 @@ html, body {
 .drow.add { background: var(--add-bg); }
 .drow.del { background: var(--del-bg); }
 .drow.hunk { background: var(--hunk-bg); color: var(--muted); }
+
+/* In dark mode the code panel stays light (to suit syntect's light colours), so the
+   per-line diff tints use the light GitHub palette here for contrast. */
+@media (prefers-color-scheme: dark) {
+  .drow.add { background: #e6ffec; }
+  .drow.del { background: #ffebe9; }
+  .drow.hunk { background: #ddf4ff; color: #656d76; }
+  .drow.add .sign { background: #abf2bc; color: #1a7f37; }
+  .drow.del .sign { background: #ff8182; color: #cf222e; }
+  .gutter { color: #656d76; }
+}
 
 .gutter {
   flex: 0 0 auto;
@@ -354,6 +433,6 @@ html, body {
 .diff::-webkit-scrollbar { width: 10px; height: 10px; }
 .scroll::-webkit-scrollbar-thumb,
 .diff::-webkit-scrollbar-thumb {
-  background: #c1c8d0;
+  background: var(--scrollbar);
   border-radius: 6px;
 }

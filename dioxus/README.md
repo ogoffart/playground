@@ -60,6 +60,16 @@ See `screenshot.png` for the rendered result.
   `scrollIntoView` against the file's `id`, which is simpler than threading scroll offsets through
   Rust state.
 
+- **Hierarchical file tree.** `build_tree` groups the diff's `FileDiff.path`s into a real directory
+  tree (a `BTreeMap`-backed builder), collapsing single-child directory chains GitHub-style
+  (`a/b/c.rs`) while branching distinct subtrees. A recursive `TreeNodeView` component renders it
+  with disclosure triangles + folder icons; collapsed folder paths live in a single
+  `Signal<HashSet<String>>`, so clicking a folder toggles its membership and re-renders that subtree.
+
+- **System theme via CSS.** Both GitHub palettes are CSS custom properties; the dark set lives under
+  `@media (prefers-color-scheme: dark)`, so the webview tracks the OS scheme automatically (headless
+  defaults to light).
+
 ## Limitations / notes
 
 - **libxdo stub.** `dioxus-desktop` transitively links `muda`/`tray-icon`/`global-hotkey`, which
@@ -73,6 +83,13 @@ See `screenshot.png` for the rendered result.
 - **Per-line highlighting.** Like every app in this repo, syntect runs statelessly per line, so
   multi-line constructs (e.g. block comments) are not carried across lines — an accepted
   approximation for a diff viewer.
+
+- **Syntect colours in dark mode.** Highlighting uses syntect's light `InspiredGitHub` palette. In
+  dark mode the app chrome (toolbar, side panel, headers) switches to the GitHub dark palette, but
+  the diff **code area keeps a light backdrop** (with the light GitHub diff tints) so the
+  light-coloured syntax spans stay legible. Switching syntect to a dark theme by scheme is possible
+  but would require runtime scheme detection in the Rust backend; this CSS-only approach keeps the
+  highlighter scheme-agnostic.
 
 - **Sticky header overlap.** With many small files the only sticky header pinned at any moment is the
   current file's own (native CSS sticky), which matches GitHub's behaviour; there is no separate

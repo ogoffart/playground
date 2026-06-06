@@ -5,13 +5,15 @@
 //! lives in Dioxus signals; the heavy `git2`/`syntect` work is funnelled through `recompute`, which
 //! rebuilds a plain `RenderDiff` whenever the selection or settings change.
 
+use std::collections::BTreeMap;
+use std::collections::HashSet;
 use std::rc::Rc;
 
 use dioxus::prelude::*;
 use git2::Oid;
 
 use crate::git::CommitInfo;
-use crate::model::RenderDiff;
+use crate::model::{file_icon, RenderDiff};
 use crate::{Engine, EngineCtx};
 
 const CSS: &str = include_str!("style.css");
@@ -65,6 +67,119 @@ impl From<&CommitInfo> for Row {
     }
 }
 
+// ===== file tree model =====
+
+/// A node in the hierarchical file tree built from the diff's file paths.
+#[derive(Clone, PartialEq)]
+enum TreeNode {
+    /// A directory; `name` is the (possibly chain-collapsed, e.g. `a/b`) label, `path` is the full
+    /// directory path used as the toggle key.
+    Dir {
+        name: String,
+        path: String,
+        depth: usize,
+        children: Vec<TreeNode>,
+    },
+    /// A file leaf; `idx` indexes into `RenderDiff::files` (for scroll-to).
+    File {
+        name: String,
+        idx: usize,
+        icon: &'static str,
+        added: u32,
+        removed: u32,
+        depth: usize,
+    },
+}
+
+/// Intermediate mutable tree node used while grouping paths.
+struct Builder {
+    dirs: BTreeMap<String, Builder>,
+    files: Vec<(String, usize, u32, u32)>, // (name, idx, added, removed)
+}
+
+impl Builder {
+    fn new() -> Self {
+        Builder {
+            dirs: BTreeMap::new(),
+            files: Vec::new(),
+        }
+    }
+
+    fn insert(&mut self, parts: &[&str], idx: usize, added: u32, removed: u32) {
+        match parts {
+            [name] => self.files.push((name.to_string(), idx, added, removed)),
+            [head, rest @ ..] => {
+                self.dirs
+                    .entry(head.to_string())
+                    .or_insert_with(Builder::new)
+                    .insert(rest, idx, added, removed);
+            }
+            [] => {}
+        }
+    }
+
+    /// Turn this builder into render `TreeNode`s, collapsing single-child directory chains
+    /// GitHub-style (`a/b/c` when each level has exactly one dir child and no files).
+    fn finish(self, prefix: &str, name: String, depth: usize) -> Vec<TreeNode> {
+        // Build dir children first, applying chain collapse.
+        let mut nodes = Vec::new();
+        for (dname, child) in self.dirs {
+            let full = if prefix.is_empty() {
+                dname.clone()
+            } else {
+                format!("{prefix}/{dname}")
+            };
+            nodes.extend(collapse_dir(dname, child, &full, depth));
+        }
+        // Then files at this level, sorted by name.
+        let mut files = self.files;
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+        for (fname, idx, added, removed) in files {
+            nodes.push(TreeNode::File {
+                icon: file_icon(&fname),
+                name: fname,
+                idx,
+                added,
+                removed,
+                depth,
+            });
+        }
+        let _ = name;
+        nodes
+    }
+}
+
+/// Produce a single Dir node for `dname` (full path `full`), collapsing chains.
+fn collapse_dir(mut dname: String, mut child: Builder, full: &str, depth: usize) -> Vec<TreeNode> {
+    let mut full = full.to_string();
+    // While this dir has exactly one subdir and no files, fold it into the label.
+    while child.files.is_empty() && child.dirs.len() == 1 {
+        let (sub_name, sub_child) = child.dirs.into_iter().next().unwrap();
+        dname = format!("{dname}/{sub_name}");
+        full = format!("{full}/{sub_name}");
+        child = sub_child;
+    }
+    let children = child.finish(&full, dname.clone(), depth + 1);
+    vec![TreeNode::Dir {
+        name: dname,
+        path: full,
+        depth,
+        children,
+    }]
+}
+
+fn build_tree(files: &[crate::model::RFile]) -> Vec<TreeNode> {
+    let mut root = Builder::new();
+    for (idx, f) in files.iter().enumerate() {
+        let parts: Vec<&str> = f.path.split('/').filter(|s| !s.is_empty()).collect();
+        if parts.is_empty() {
+            continue;
+        }
+        root.insert(&parts, idx, f.added, f.removed);
+    }
+    root.finish("", String::new(), 0)
+}
+
 fn recompute(engine: &Engine, showing: Showing, settings: Settings) -> RenderDiff {
     let ignore_ws = !settings.show_space;
     let res = match showing {
@@ -108,6 +223,9 @@ pub fn app() -> Element {
     let mut commits_h = use_signal(|| 380.0_f64);
     let drag = use_signal(|| None::<DragKind>);
 
+    // Collapsed folder paths in the file tree (expanded by default => absent means expanded).
+    let collapsed = use_signal(HashSet::<String>::new);
+
     // The rendered diff. Recomputed via an effect whenever the selection or whitespace setting
     // changes (font / wrap / line-numbers are pure CSS and don't need a rebuild).
     let mut diff = use_signal(RenderDiff::empty);
@@ -125,6 +243,7 @@ pub fn app() -> Element {
 
     let st = *settings.read();
     let d = diff.read();
+    let tree = build_tree(&d.files);
 
     // ----- toolbar summary pieces -----
     let summary = d.summary.clone();
@@ -171,6 +290,43 @@ pub fn app() -> Element {
             class: "root",
             style: "--side-w: {side_w}px; --commits-h: {commits_h}px; --diff-font: {font_px}px;",
 
+            // ===== TOOLBAR (full width, pinned at the very top) =====
+            div { class: "toolbar",
+                div { class: "summary",
+                    span { class: "summary-text", "{summary}" }
+                    span { class: "add", "+{total_added}" }
+                    span { class: "del", "−{total_removed}" }
+                }
+                div { class: "tools",
+                    ToolButton {
+                        label: "⤶", active: st.word_wrap,
+                        tip: if st.word_wrap { "Word wrap: on" } else { "Word wrap: off" },
+                        onclick: move |_| { let mut s = settings.write(); s.word_wrap = !s.word_wrap; },
+                    }
+                    ToolButton {
+                        label: "␣", active: st.show_space,
+                        tip: if st.show_space { "Showing space changes" } else { "Ignoring whitespace-only changes" },
+                        onclick: move |_| { let mut s = settings.write(); s.show_space = !s.show_space; },
+                    }
+                    ToolButton {
+                        label: "A-", active: false, tip: "Decrease font size",
+                        onclick: move |_| { let mut s = settings.write(); s.font_size = (s.font_size - 1.0).max(8.0); },
+                    }
+                    ToolButton {
+                        label: "A+", active: false, tip: "Increase font size",
+                        onclick: move |_| { let mut s = settings.write(); s.font_size = (s.font_size + 1.0).min(28.0); },
+                    }
+                    ToolButton {
+                        label: "#", active: st.line_numbers,
+                        tip: if st.line_numbers { "Line numbers: on" } else { "Line numbers: off" },
+                        onclick: move |_| { let mut s = settings.write(); s.line_numbers = !s.line_numbers; },
+                    }
+                }
+            }
+
+            // ===== BODY: [ side panel | main view ] =====
+            div { class: "body",
+
             // ===== LEFT SIDE PANEL =====
             aside {
                 class: "side",
@@ -197,29 +353,13 @@ pub fn app() -> Element {
                     class: "vdivider",
                     onmousedown: move |_| start_drag(drag, DragKind::Vert),
                 }
-                // ----- file tree -----
+                // ----- file tree (real hierarchical tree) -----
                 section {
                     class: "files",
                     div { class: "section-head", "FILES ({d.files.len()})" }
                     div { class: "scroll",
-                        for (i, f) in d.files.iter().enumerate() {
-                            div {
-                                key: "{i}-{f.path}",
-                                class: "file-row",
-                                onclick: move |_| {
-                                    // Scroll the diff body to this file's section.
-                                    let js = format!(
-                                        "var e=document.getElementById('file-{i}'); if(e) e.scrollIntoView({{behavior:'smooth',block:'start'}});"
-                                    );
-                                    let _ = document::eval(&js);
-                                },
-                                span { class: "ficon", "{f.icon}" }
-                                span { class: "fpath", "{f.path}" }
-                                span { class: "fcount",
-                                    span { class: "add", "+{f.added}" }
-                                    span { class: "del", "−{f.removed}" }
-                                }
-                            }
+                        for node in tree.iter().cloned() {
+                            TreeNodeView { node, collapsed }
                         }
                     }
                 }
@@ -234,40 +374,6 @@ pub fn app() -> Element {
             // ===== MAIN VIEW =====
             main {
                 class: "main",
-                // ----- toolbar -----
-                div { class: "toolbar",
-                    div { class: "summary",
-                        span { class: "summary-text", "{summary}" }
-                        span { class: "add", "+{total_added}" }
-                        span { class: "del", "−{total_removed}" }
-                    }
-                    div { class: "tools",
-                        ToolButton {
-                            label: "⤶", active: st.word_wrap,
-                            tip: if st.word_wrap { "Word wrap: on" } else { "Word wrap: off" },
-                            onclick: move |_| { let mut s = settings.write(); s.word_wrap = !s.word_wrap; },
-                        }
-                        ToolButton {
-                            label: "␣", active: st.show_space,
-                            tip: if st.show_space { "Showing space changes" } else { "Ignoring whitespace-only changes" },
-                            onclick: move |_| { let mut s = settings.write(); s.show_space = !s.show_space; },
-                        }
-                        ToolButton {
-                            label: "A-", active: false, tip: "Decrease font size",
-                            onclick: move |_| { let mut s = settings.write(); s.font_size = (s.font_size - 1.0).max(8.0); },
-                        }
-                        ToolButton {
-                            label: "A+", active: false, tip: "Increase font size",
-                            onclick: move |_| { let mut s = settings.write(); s.font_size = (s.font_size + 1.0).min(28.0); },
-                        }
-                        ToolButton {
-                            label: "#", active: st.line_numbers,
-                            tip: if st.line_numbers { "Line numbers: on" } else { "Line numbers: off" },
-                            onclick: move |_| { let mut s = settings.write(); s.line_numbers = !s.line_numbers; },
-                        }
-                    }
-                }
-
                 // ----- diff body -----
                 div { class: "diff {wrap_class} {ln_class}",
                     if let Some(err) = &d.error {
@@ -291,6 +397,7 @@ pub fn app() -> Element {
                     }
                 }
             }
+            } // end .body
 
             // ===== DRAG OVERLAY =====
             // While a divider is held, a full-window transparent layer captures mousemove/up so the
@@ -311,8 +418,9 @@ pub fn app() -> Element {
                                 side_w.set(w);
                             }
                             Some(DragKind::Vert) => {
-                                // y measured from the top of the side panel (toolbar lives in main).
-                                let h = (p.y - 4.0).clamp(120.0, 1000.0);
+                                // y is window-relative; subtract the full-width toolbar height that
+                                // now sits above the side panel.
+                                let h = (p.y - 38.0).clamp(120.0, 1000.0);
                                 commits_h.set(h);
                             }
                             None => {}
@@ -390,6 +498,74 @@ fn CommitRow(
                 class: "cr-title",
                 onclick: move |_| on_open.call(oid),
                 "{row.title}"
+            }
+        }
+    }
+}
+
+/// Recursively renders one file-tree node (directory or file leaf). `collapsed` is the shared set
+/// of collapsed directory paths.
+#[component]
+fn TreeNodeView(node: TreeNode, collapsed: Signal<HashSet<String>>) -> Element {
+    match node {
+        TreeNode::Dir {
+            name,
+            path,
+            depth,
+            children,
+        } => {
+            let is_collapsed = collapsed.read().contains(&path);
+            let indent = format!("padding-left: {}px;", 8 + depth * 14);
+            let arrow = if is_collapsed { "▸" } else { "▾" };
+            let toggle_path = path.clone();
+            rsx! {
+                div {
+                    class: "tree-row tree-dir",
+                    style: "{indent}",
+                    onclick: move |_| {
+                        let mut set = collapsed.write();
+                        if !set.remove(&toggle_path) {
+                            set.insert(toggle_path.clone());
+                        }
+                    },
+                    span { class: "tri", "{arrow}" }
+                    span { class: "ficon", "📁" }
+                    span { class: "fpath", "{name}" }
+                }
+                if !is_collapsed {
+                    for child in children.iter().cloned() {
+                        TreeNodeView { node: child, collapsed }
+                    }
+                }
+            }
+        }
+        TreeNode::File {
+            name,
+            idx,
+            icon,
+            added,
+            removed,
+            depth,
+        } => {
+            // file leaves align past the disclosure-triangle column of their parent dir.
+            let indent = format!("padding-left: {}px;", 8 + depth * 14 + 14);
+            rsx! {
+                div {
+                    class: "tree-row file-row",
+                    style: "{indent}",
+                    onclick: move |_| {
+                        let js = format!(
+                            "var e=document.getElementById('file-{idx}'); if(e) e.scrollIntoView({{behavior:'smooth',block:'start'}});"
+                        );
+                        let _ = document::eval(&js);
+                    },
+                    span { class: "ficon", "{icon}" }
+                    span { class: "fpath", "{name}" }
+                    span { class: "fcount",
+                        span { class: "add", "+{added}" }
+                        span { class: "del", "−{removed}" }
+                    }
+                }
             }
         }
     }

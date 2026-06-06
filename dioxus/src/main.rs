@@ -52,7 +52,7 @@ fn main() {
 
     let window = WindowBuilder::new()
         .with_title("git-review · dioxus")
-        .with_inner_size(dioxus::desktop::tao::dpi::LogicalSize::new(1200.0, 820.0))
+        .with_inner_size(dioxus::desktop::tao::dpi::LogicalSize::new(1280.0, 800.0))
         .with_min_inner_size(dioxus::desktop::tao::dpi::LogicalSize::new(700.0, 480.0));
 
     let cfg = Config::new().with_window(window).with_menu(None);
