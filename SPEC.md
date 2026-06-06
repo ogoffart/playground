@@ -10,26 +10,29 @@ GitHub's "Files changed" view.
 ## Window layout
 
 ```
-┌──────────────┬──────────────────────────────────────────────┐
-│ commit list  │  toolbar:  git show a1b2c3   +120 −34   [⤶][␣][A-][A+][#] │
-│  (resizable) ├──────────────────────────────────────────────┤
-│              │                                              │
-├──────────────┤   diff view (scrollable)                     │
-│ file tree    │   ┌── src/main.rs   +12 −3 ───────────(sticky)│
-│  (resizable) │   │  1  1   fn main() {                       │
-│              │   │     2 +     println!("hi");               │
-│              │   │  2      -   todo!();                       │
-└──────────────┴──────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────┐
+│ TOOLBAR (full width):  git show a1b2c3  +120 −34   [⤶][␣][A-][A+][#] │
+├──────────────┬────────────────────────────────────────────────┤
+│ commit list  │                                                │
+│  (resizable) │   diff view (scrollable)                       │
+├──────────────┤   ┌── src/main.rs   +12 −3 ───────────(sticky) │
+│ file tree    │   │  1  1   fn main() {                        │
+│  (resizable) │   │     2 +     println!("hi");                │
+│              │   │  2      -   todo!();                        │
+└──────────────┴────────────────────────────────────────────────┘
        ▲ the whole left side panel is horizontally resizable
 ```
 
-- A left **side panel**, horizontally **resizable** against the main view.
+- The **toolbar is a single full-width bar pinned at the very top of the window**, spanning the
+  entire width **above both the side panel and the main view**. It must read as a toolbar (a
+  distinct bar with a bottom border / subtle background, slightly inset icon buttons).
+- Below the toolbar: a left **side panel**, horizontally **resizable** against the main view.
 - The side panel is split **vertically** into two **resizable** parts:
   - **top:** the commit list,
   - **bottom:** the file tree of the current diff.
-- The **main view** is the diff, with a toolbar pinned at its top and a scrollable body.
+- The **main view** is the scrollable diff body.
 
-## Toolbar (top of the main view)
+## Toolbar (full-width, top of the window)
 
 - **Left — summary** of what is being shown:
   - single commit: `git show <short-sha>`
@@ -62,13 +65,20 @@ Behaviour:
 
 ## File tree (bottom of side panel)
 
-The files present in the current diff, as a tree (directories collapsible). Each file row shows:
+The files in the current diff shown as a **real, hierarchical tree** — NOT a flat list of full
+paths. Directory components become **collapsible folder nodes** (e.g. `src/` then `main.rs`,
+`math.rs` nested under it), indented by depth, expanded by default, with a disclosure
+triangle/arrow. A common single-child directory chain may be collapsed into one node
+(`a/b/c.rs`) GitHub-style, but distinct subtrees must branch.
+
+Each **file leaf** row shows:
 
 - a **file-type icon** (by extension),
-- the **path / name**,
-- the per-file **`+added −removed`** counts.
+- the **file name** (not the whole path),
+- the per-file **`+added −removed`** counts (green / red).
 
-Clicking a file **scrolls the diff view** to that file's section.
+Each **folder** row shows a folder icon and its name. Clicking a file leaf **scrolls the diff
+view** to that file's section; clicking a folder toggles its expansion.
 
 ## Diff view (main, scrollable)
 
@@ -108,11 +118,42 @@ Each app takes the repository path as **argv[1]** (or `$GIT_REVIEW_REPO`), defau
 current directory. Use `tools/make-sample-repo.sh` to generate a demo repo with varied file
 types and changes to point the apps at.
 
-## Visual style
+## Visual style & theme
 
-Modern desktop, GitHub-familiar. Light theme by default:
+Modern desktop, GitHub-familiar. The app **follows the desktop's colour scheme**: it detects the
+OS/desktop light-vs-dark setting at startup and uses the matching palette. (Native Rust apps can
+use the `dark-light` crate or the toolkit's own detection — egui/eframe, GTK, and Qt follow the
+system theme natively; web apps use CSS `prefers-color-scheme`. In a headless environment with no
+desktop preference, default to **light**.)
 
+**Light** (GitHub light):
 - background `#ffffff`, panels `#f6f8fa`, borders `#d0d7de`, text `#1f2328`, muted `#656d76`,
-  accent/links `#0969da`.
-- diff added bg `#e6ffec` / marker `#abf2bc`; removed bg `#ffebe9` / marker `#ff8182`.
-- monospace for diff (`ui-monospace`, system mono), system UI font for chrome.
+  accent `#0969da`, selection `#ddf4ff`.
+- diff added bg `#e6ffec` / marker `#abf2bc` / fg `#1a7f37`; removed bg `#ffebe9` / marker
+  `#ff8182` / fg `#cf222e`.
+
+**Dark** (GitHub dark):
+- background `#0d1117`, panels `#161b22`, borders `#30363d`, text `#e6edf3`, muted `#8b949e`,
+  accent `#2f81f7`, selection `#1f6feb`.
+- diff added bg `#12261e` / marker `#2ea043` / fg `#3fb950`; removed bg `#25171c` / marker
+  `#f85149` / fg `#f85149`.
+
+Monospace for diff (`ui-monospace`, system mono), system UI font for chrome. Syntax-highlight
+theme should track the scheme too (e.g. syntect `InspiredGitHub` for light, `base16-ocean.dark`
+or similar for dark).
+
+## Release build (optimise for size)
+
+Each crate's release profile is tuned for a small binary:
+
+```toml
+[profile.release]
+opt-level = "z"      # or "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+```
+
+Report the **release binary size** and the **compressed (shippable) size** for the comparison
+table.
