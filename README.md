@@ -55,22 +55,34 @@ Apps are landed one framework at a time, each build-verified and smoke-tested he
 (`xvfb` + a screenshot against the sample repo). See each folder's `README.md` and
 `screenshot.png` for details.
 
-| Framework | State | Notes |
-|---|---|---|
-| egui | ✅ done | immediate-mode; hand-laid diff rows, overlay sticky header |
-| gtk4 | ✅ done | `GtkPaned` splits, GtkSourceView/TextTag diff, overlay sticky |
-| slint | ✅ done | declarative markup, draggable splitters, Flickable + floating sticky |
-| iced | ✅ done | `pane_grid` splits, `rich_text` spans, overlay sticky |
-| qt-qmetaobject | ✅ done | QML `SplitView`, `ListView` sections = true sticky headers |
-| tauri | ✅ done | web frontend, CSS `position: sticky`, collapsible file tree |
-| dioxus | ✅ done | RSX + CSS sticky headers; libxdo link stub for headless |
-| floem | ⏳ in progress | |
-| qt-cxx | ⏳ in progress | |
-| gpui | ⏳ in progress | |
-| xilem | ⏳ in progress | |
-| qt-widgets | ⏳ pending | |
-| makepad | ⏳ pending | |
-| freya | ⏳ pending | |
+All 14 are implemented and build-verified. 12 were captured rendering headless (see each folder's
+`screenshot.png`); the two exceptions are noted below and are environment limitations of this
+headless/no-GPU container, not app bugs.
 
-All native apps build `git2`'s vendored libgit2; the Qt apps need Qt 6 + the QtQuick QML modules,
-the GTK app needs GTK 4 + GtkSourceView 5, and the web apps need webkit2gtk.
+| Framework | Build | Headless render | Notes |
+|---|---|---|---|
+| egui | ✅ | ✅ shot | immediate-mode; hand-laid diff rows, overlay sticky header |
+| gtk4 | ✅ | ✅ shot | `GtkPaned` splits, TextView/TextTag diff, overlay sticky |
+| slint | ✅ | ✅ shot | declarative markup, draggable splitters, Flickable + floating sticky |
+| iced | ✅ | ✅ shot | `pane_grid` splits, `rich_text` spans, overlay sticky |
+| qt-qmetaobject | ✅ | ✅ shot | QML `SplitView`, `ListView` sections = **true** sticky headers |
+| tauri | ✅ | ✅ shot | web frontend, CSS `position: sticky`, collapsible file tree |
+| dioxus | ✅ | ✅ shot | RSX + CSS sticky headers; libxdo link stub for headless |
+| floem | ✅ | ✅ shot | reactive signals, draggable splitters, lavapipe render |
+| qt-cxx | ✅ | ✅ shot | cxx-qt bridge; same QML as qmetaobject (clean A/B) |
+| qt-widgets | ✅ | ✅ shot | **native QtWidgets** via a C++ shim + C-ABI (no QML/moc) |
+| xilem | ✅ | ✅ shot | alpha (Masonry/Vello); one label per span; lavapipe render |
+| makepad | ✅ | ⚠ layout only | `live_design!` DSL, `Splitter`+`PortalList`, custom `DiffRow`; text glyphs don't paint under software GL (llvmpipe) |
+| gpui | ✅ | ⚠ no capture | Zed's framework; runs on Vulkan (lavapipe) but the swapchain present path isn't screen-capturable headless |
+| freya | ✅ | ✅ shot | Skia + own reactive core; builder API; lavapipe render |
+
+All native apps build `git2`'s vendored libgit2 (needs `cmake` + a C compiler). The three Qt apps
+need Qt 6 (+ the QtQuick QML modules for the two QML ones); the GTK app needs GTK 4; the web apps
+(tauri, dioxus) need webkit2gtk; the wgpu/GL apps render headless via Mesa **lavapipe** (software
+Vulkan) or `LIBGL_ALWAYS_SOFTWARE=1`.
+
+### Other Rust UI frameworks not included
+
+Beyond the 14 above, the remaining notable Rust GUI options are either superseded or niche:
+**Druid** (deprecated, succeeded by Xilem), **Vizia**, **Cushy**, **Ribir**, and **Bevy UI**
+(game-engine UI). Any of these could be added following the same `SPEC.md` contract.
