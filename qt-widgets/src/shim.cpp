@@ -37,9 +37,14 @@
 #include <functional>
 #include <vector>
 
+#include <QStyleHints>
+#include <QGuiApplication>
+#include <QPalette>
+#include <QColor>
+
 // ---- Rust C ABI ----------------------------------------------------------
 extern "C" {
-int gr_open(const char *path);
+int gr_open(const char *path, int dark);
 char *gr_repo_name();
 char *gr_commits();
 char *gr_working(int show_space_changes);
@@ -61,18 +66,80 @@ static QJsonDocument parseRust(char *p) {
     return QJsonDocument::fromJson(s.toUtf8());
 }
 
-// ---- GitHub-ish palette --------------------------------------------------
+// ---- GitHub-ish palette (light + dark) -----------------------------------
+// `pal` is filled in at startup from the detected colour scheme.
 namespace pal {
-const char *bg = "#ffffff";
-const char *panel = "#f6f8fa";
-const char *border = "#d0d7de";
-const char *text = "#1f2328";
-const char *muted = "#656d76";
-const char *accent = "#0969da";
-const char *addBg = "#e6ffec";
-const char *addMark = "#abf2bc";
-const char *delBg = "#ffebe9";
-const char *delMark = "#ff8182";
+const char *bg;
+const char *panel;
+const char *border;
+const char *text;
+const char *muted;
+const char *accent;
+const char *selection;
+const char *hover;
+const char *addBg;
+const char *addMark;
+const char *addFg;
+const char *delBg;
+const char *delMark;
+const char *delFg;
+const char *hunkBg;
+bool dark = false;
+}
+
+static void applyPalette(bool dark) {
+    pal::dark = dark;
+    if (dark) {
+        pal::bg = "#0d1117";
+        pal::panel = "#161b22";
+        pal::border = "#30363d";
+        pal::text = "#e6edf3";
+        pal::muted = "#8b949e";
+        pal::accent = "#2f81f7";
+        pal::selection = "#1f6feb";
+        pal::hover = "#21262d";
+        pal::addBg = "#12261e";
+        pal::addMark = "#2ea043";
+        pal::addFg = "#3fb950";
+        pal::delBg = "#25171c";
+        pal::delMark = "#f85149";
+        pal::delFg = "#f85149";
+        pal::hunkBg = "#161b22";
+    } else {
+        pal::bg = "#ffffff";
+        pal::panel = "#f6f8fa";
+        pal::border = "#d0d7de";
+        pal::text = "#1f2328";
+        pal::muted = "#656d76";
+        pal::accent = "#0969da";
+        pal::selection = "#ddf4ff";
+        pal::hover = "#eaeef2";
+        pal::addBg = "#e6ffec";
+        pal::addMark = "#abf2bc";
+        pal::addFg = "#1a7f37";
+        pal::delBg = "#ffebe9";
+        pal::delMark = "#ff8182";
+        pal::delFg = "#cf222e";
+        pal::hunkBg = "#f6f8fa";
+    }
+}
+
+// Detect the desktop colour scheme. Env override GIT_REVIEW_THEME=dark|light wins;
+// then Qt's QStyleHints::colorScheme() (Qt 6.5+); else palette window lightness; headless -> light.
+static bool detectDark() {
+    QByteArray env = qgetenv("GIT_REVIEW_THEME").toLower();
+    if (env == "dark") return true;
+    if (env == "light") return false;
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+    if (auto *h = QGuiApplication::styleHints()) {
+        Qt::ColorScheme cs = h->colorScheme();
+        if (cs == Qt::ColorScheme::Dark) return true;
+        if (cs == Qt::ColorScheme::Light) return false;
+    }
+#endif
+    // Fallback: a dark window colour means a dark desktop theme.
+    QColor win = QGuiApplication::palette().color(QPalette::Window);
+    return win.lightnessF() < 0.5;
 }
 
 struct Settings {
@@ -159,8 +226,9 @@ static QString buildFileHtml(const QJsonObject &file, const Settings &s, int fon
     for (const QJsonValue &hv : hunks) {
         QJsonObject hunk = hv.toObject();
         // hunk header row
-        html += "<tr><td colspan='3' style='background:#f6f8fa; color:" + QString(pal::accent) +
-                "; padding:2px 8px;'>" + htmlEscape(hunk["header"].toString()) + "</td></tr>";
+        html += "<tr><td colspan='3' style='background:" + QString(pal::hunkBg) + "; color:" +
+                QString(pal::accent) + "; padding:2px 8px;'>" +
+                htmlEscape(hunk["header"].toString()) + "</td></tr>";
 
         QJsonArray lines = hunk["lines"].toArray();
         for (const QJsonValue &lv : lines) {
@@ -240,6 +308,80 @@ static void sizeTextEdit(QTextEdit *te, bool wrap) {
     te->setMaximumHeight(h + 4);
 }
 
+// ---- File tree (real hierarchy) ------------------------------------------
+//
+// Items carry: text(0) = display name of this path component (no rich text here;
+// leaves get a coloured item-widget set later). Qt::UserRole = full file path on
+// leaves only. Qt::UserRole+1 = bool isLeaf. Qt::UserRole+2 = the bare component
+// name (used while collapsing single-child dir chains).
+
+// Find or create a child *directory* node with the given component name.
+static QTreeWidgetItem *childDir(QTreeWidgetItem *parent, const QString &comp) {
+    for (int i = 0; i < parent->childCount(); ++i) {
+        QTreeWidgetItem *c = parent->child(i);
+        if (!c->data(0, Qt::UserRole + 1).toBool() &&
+            c->data(0, Qt::UserRole + 2).toString() == comp) {
+            return c;
+        }
+    }
+    QTreeWidgetItem *c = new QTreeWidgetItem(parent);
+    c->setData(0, Qt::UserRole + 1, false);
+    c->setData(0, Qt::UserRole + 2, comp);
+    c->setText(0, "\xF0\x9F\x93\x81  " + comp);
+    return c;
+}
+
+// Insert a file into the tree, creating intermediate directory nodes.
+static void addFileToTree(AppCtx *ctx, const QString &path, const QString &name,
+                          int added, int removed) {
+    QStringList parts = path.split('/', Qt::SkipEmptyParts);
+    QTreeWidgetItem *node = ctx->fileTree->invisibleRootItem();
+    for (int i = 0; i < parts.size() - 1; ++i) {
+        node = childDir(node, parts[i]);
+    }
+    QTreeWidgetItem *leaf = new QTreeWidgetItem(node);
+    leaf->setData(0, Qt::UserRole, path);
+    leaf->setData(0, Qt::UserRole + 1, true);
+    leaf->setData(0, Qt::UserRole + 2, name);
+    // Coloured rich-text row via an item widget.
+    QLabel *lbl = new QLabel(
+        QString("%1&nbsp;&nbsp;%2&nbsp;&nbsp;&nbsp;"
+                "<span style='color:%3;'>+%4</span> "
+                "<span style='color:%5;'>\xE2\x88\x92%6</span>")
+            .arg(iconFor(path))
+            .arg(name.toHtmlEscaped())
+            .arg(pal::addFg)
+            .arg(added)
+            .arg(pal::delFg)
+            .arg(removed));
+    lbl->setStyleSheet(QString("color:%1; background:transparent;").arg(pal::text));
+    ctx->fileTree->setItemWidget(leaf, 0, lbl);
+}
+
+// GitHub-style: collapse a directory whose only child is itself a directory into a
+// single combined "a/b" node, recursively. Distinct subtrees keep branching.
+static void collapseSingleChildDirs(QTreeWidgetItem *node) {
+    for (int i = 0; i < node->childCount(); ++i) {
+        QTreeWidgetItem *c = node->child(i);
+        bool cIsLeaf = c->data(0, Qt::UserRole + 1).toBool();
+        if (cIsLeaf) continue;
+        // collapse chains: while this dir has exactly one child that is a dir, merge.
+        while (c->childCount() == 1 &&
+               !c->child(0)->data(0, Qt::UserRole + 1).toBool()) {
+            QTreeWidgetItem *only = c->takeChild(0);
+            QString merged = c->data(0, Qt::UserRole + 2).toString() + "/" +
+                             only->data(0, Qt::UserRole + 2).toString();
+            c->setData(0, Qt::UserRole + 2, merged);
+            c->setText(0, "\xF0\x9F\x93\x81  " + merged);
+            // adopt grandchildren
+            QList<QTreeWidgetItem *> kids = only->takeChildren();
+            c->addChildren(kids);
+            delete only;
+        }
+        collapseSingleChildDirs(c);
+    }
+}
+
 // Rebuild the entire main diff view from a diff JSON object.
 static void renderDiff(AppCtx *ctx, const QJsonObject &diff) {
     // clear old
@@ -256,9 +398,11 @@ static void renderDiff(AppCtx *ctx, const QJsonObject &diff) {
     ctx->totalRemoved = diff["removed"].toInt();
     ctx->summaryLabel->setText(ctx->summary);
     ctx->countsLabel->setText(
-        QString("<span style='color:#1a7f37;'>+%1</span> &nbsp;"
-                "<span style='color:#cf222e;'>\xE2\x88\x92%2</span>")
+        QString("<span style='color:%1;'>+%2</span> &nbsp;"
+                "<span style='color:%3;'>\xE2\x88\x92%4</span>")
+            .arg(pal::addFg)
             .arg(ctx->totalAdded)
+            .arg(pal::delFg)
             .arg(ctx->totalRemoved));
 
     int fontPx = ctx->settings.font_size + 2;
@@ -301,14 +445,13 @@ static void renderDiff(AppCtx *ctx, const QJsonObject &diff) {
         ctx->diffLayout->addWidget(empty);
     }
 
-    // file-tree: flat-by-directory grouping
-    QHash<QString, QTreeWidgetItem *> dirItems;
-
     for (const QJsonValue &fv : files) {
         QJsonObject file = fv.toObject();
         QString path = file["path"].toString();
         int added = file["added"].toInt();
         int removed = file["removed"].toInt();
+        int slash = path.lastIndexOf('/');
+        QString name = slash >= 0 ? path.mid(slash + 1) : path;
 
         // ---- file section in main view ----
         QWidget *section = new QWidget();
@@ -328,9 +471,11 @@ static void renderDiff(AppCtx *ctx, const QJsonObject &diff) {
         hpath->setStyleSheet(QString("font-weight:bold; color:%1; background:transparent;").arg(pal::text));
         hl->addWidget(hpath);
         hl->addStretch();
-        QLabel *hcounts = new QLabel(QString("<span style='color:#1a7f37;'>+%1</span> "
-                                             "<span style='color:#cf222e;'>\xE2\x88\x92%2</span>")
+        QLabel *hcounts = new QLabel(QString("<span style='color:%1;'>+%2</span> "
+                                             "<span style='color:%3;'>\xE2\x88\x92%4</span>")
+                                         .arg(pal::addFg)
                                          .arg(added)
+                                         .arg(pal::delFg)
                                          .arg(removed));
         hcounts->setStyleSheet("background:transparent;");
         hl->addWidget(hcounts);
@@ -347,25 +492,12 @@ static void renderDiff(AppCtx *ctx, const QJsonObject &diff) {
         ctx->diffLayout->addWidget(section);
         ctx->fileSections.push_back({path, section});
 
-        // ---- file-tree entry ----
-        int slash = path.lastIndexOf('/');
-        QString dir = slash >= 0 ? path.left(slash) : QString();
-        QString name = slash >= 0 ? path.mid(slash + 1) : path;
-        QTreeWidgetItem *parent = nullptr;
-        if (!dir.isEmpty()) {
-            if (!dirItems.contains(dir)) {
-                QTreeWidgetItem *di = new QTreeWidgetItem(ctx->fileTree);
-                di->setText(0, "\xF0\x9F\x93\x81  " + dir);
-                di->setExpanded(true);
-                dirItems.insert(dir, di);
-            }
-            parent = dirItems.value(dir);
-        }
-        QTreeWidgetItem *fi = parent ? new QTreeWidgetItem(parent) : new QTreeWidgetItem(ctx->fileTree);
-        fi->setText(0, iconFor(path) + "  " + name + QString("   +%1 \xE2\x88\x92%2").arg(added).arg(removed));
-        fi->setData(0, Qt::UserRole, path);
+        // ---- file-tree entry (real hierarchy, built incrementally below) ----
+        addFileToTree(ctx, path, name, added, removed);
     }
 
+    collapseSingleChildDirs(ctx->fileTree->invisibleRootItem());
+    ctx->fileTree->expandAll();
     ctx->diffLayout->addStretch();
 }
 
@@ -411,8 +543,8 @@ static QWidget *makeCommitRow(AppCtx *ctx, const QJsonObject &c, QListWidget *li
         b->setCursor(Qt::PointingHandCursor);
         b->setStyleSheet(QString(
             "QPushButton{font-size:10px; padding:0 5px; border:1px solid %1; border-radius:4px;"
-            "background:%2; color:%3;} QPushButton:hover{background:#eaeef2;}")
-            .arg(pal::border).arg(pal::bg).arg(pal::muted));
+            "background:%2; color:%3;} QPushButton:hover{background:%4;}")
+            .arg(pal::border).arg(pal::bg).arg(pal::muted).arg(pal::hover));
         return b;
     };
 
@@ -461,7 +593,32 @@ extern "C" int gr_run_app(int argc, const char **argv, const char *repo_path) {
     QApplication app(s_argc, const_cast<char **>(argv));
     app.setApplicationName("git-review (Qt Widgets)");
 
-    if (!gr_open(repo_path)) {
+    // Follow the desktop light/dark colour scheme.
+    bool dark = detectDark();
+    applyPalette(dark);
+
+    // Apply a matching QPalette so native chrome (scrollbars, tooltips, base widgets)
+    // tracks the scheme too, alongside the per-widget stylesheets below.
+    {
+        QPalette p = app.palette();
+        QColor bg(pal::bg), panel(pal::panel), text(pal::text), accent(pal::accent),
+            sel(pal::selection), border(pal::border);
+        p.setColor(QPalette::Window, bg);
+        p.setColor(QPalette::WindowText, text);
+        p.setColor(QPalette::Base, bg);
+        p.setColor(QPalette::AlternateBase, panel);
+        p.setColor(QPalette::Text, text);
+        p.setColor(QPalette::Button, panel);
+        p.setColor(QPalette::ButtonText, text);
+        p.setColor(QPalette::Highlight, sel);
+        p.setColor(QPalette::HighlightedText, dark ? QColor(pal::text) : QColor("#0d1117"));
+        p.setColor(QPalette::ToolTipBase, panel);
+        p.setColor(QPalette::ToolTipText, text);
+        p.setColor(QPalette::Mid, border);
+        app.setPalette(p);
+    }
+
+    if (!gr_open(repo_path, dark ? 1 : 0)) {
         QLabel *err = new QLabel(QString("Could not open a git repository at:\n%1")
                                      .arg(QString::fromUtf8(repo_path)));
         err->setMargin(40);
@@ -473,16 +630,18 @@ extern "C" int gr_run_app(int argc, const char **argv, const char *repo_path) {
 
     QMainWindow win;
     win.setWindowTitle(QString("git-review \xE2\x80\x94 %1").arg(takeRust(gr_repo_name())));
-    win.resize(1280, 860);
-    win.setStyleSheet(QString("QMainWindow{background:%1;}").arg(pal::bg));
+    win.resize(1280, 800);
+    win.setStyleSheet(QString("QMainWindow{background:%1;} "
+                              "QToolTip{background:%2; color:%3; border:1px solid %4;}")
+                          .arg(pal::bg).arg(pal::panel).arg(pal::text).arg(pal::border));
 
     // ===== left side panel: nested splitters =====
     ctx->commitList = new QListWidget();
     ctx->commitList->setStyleSheet(QString(
         "QListWidget{background:%1; border:none;} "
         "QListWidget::item{border-bottom:1px solid %2;} "
-        "QListWidget::item:selected{background:#ddf4ff;}")
-        .arg(pal::panel).arg(pal::border));
+        "QListWidget::item:selected{background:%3;}")
+        .arg(pal::panel).arg(pal::border).arg(pal::selection));
 
     ctx->fileTree = new QTreeWidget();
     ctx->fileTree->setHeaderHidden(true);
@@ -545,9 +704,10 @@ extern "C" int gr_run_app(int argc, const char **argv, const char *repo_path) {
         b->setCursor(Qt::PointingHandCursor);
         b->setStyleSheet(QString(
             "QToolButton{border:1px solid %1; border-radius:5px; padding:3px 8px; background:%2; color:%3;}"
-            "QToolButton:hover{background:#eaeef2;}"
-            "QToolButton:checked{background:#ddf4ff; border-color:%4; color:%4;}")
-            .arg(pal::border).arg(pal::bg).arg(pal::text).arg(pal::accent));
+            "QToolButton:hover{background:%5;}"
+            "QToolButton:checked{background:%6; border-color:%4; color:%4;}")
+            .arg(pal::border).arg(pal::bg).arg(pal::text).arg(pal::accent)
+            .arg(pal::hover).arg(pal::selection));
         toolbar->addWidget(b);
         return b;
     };
@@ -560,8 +720,6 @@ extern "C" int gr_run_app(int argc, const char **argv, const char *repo_path) {
 
     ctx->btnSpace->setChecked(true);  // show by default
     ctx->btnLineNo->setChecked(true);
-
-    mvl->addWidget(toolbar);
 
     // scrollable diff body
     ctx->diffScroll = new QScrollArea();
@@ -583,6 +741,12 @@ extern "C" int gr_run_app(int argc, const char **argv, const char *repo_path) {
     outer->setStretchFactor(0, 0);
     outer->setStretchFactor(1, 1);
     win.setCentralWidget(outer);
+
+    // Full-width toolbar pinned at the very top, spanning above both side panel and
+    // main view (a top QToolBar in a QMainWindow spans the whole window width).
+    toolbar->setMovable(false);
+    toolbar->setFloatable(false);
+    win.addToolBar(Qt::TopToolBarArea, toolbar);
 
     // ===== wiring =====
     ctx->reload = [ctx]() { reloadDiff(ctx); };

@@ -21,3 +21,10 @@ cc = { version = "1.0", features = ["parallel"] }
 
 [profile.dev]
 opt-level = 1
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

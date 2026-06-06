@@ -34,15 +34,16 @@ pub extern "C" fn gr_free(p: *mut c_char) {
     }
 }
 
-/// Open the repository at `path`. Returns 1 on success, 0 on failure.
+/// Open the repository at `path`. `dark` selects the syntax-highlight theme (1 dark, 0 light).
+/// Returns 1 on success, 0 on failure.
 #[no_mangle]
-pub extern "C" fn gr_open(path: *const c_char) -> i32 {
+pub extern "C" fn gr_open(path: *const c_char, dark: i32) -> i32 {
     let path = unsafe { CStr::from_ptr(path) }.to_string_lossy().into_owned();
     match Repo::open(&path) {
         Ok(repo) => {
             *STATE.lock().unwrap() = Some(State {
                 repo,
-                hl: Highlighter::new(),
+                hl: Highlighter::new(dark != 0),
             });
             1
         }
