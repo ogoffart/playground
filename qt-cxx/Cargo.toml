@@ -24,3 +24,10 @@ cxx-qt-build = "0.7"
 
 [profile.dev]
 opt-level = 1
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

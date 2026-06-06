@@ -27,6 +27,12 @@ use highlight::Highlighter;
 /// `initialize()` hook, since QML constructs the object and cannot pass constructor arguments.
 static REPO_PATH: Mutex<Option<String>> = Mutex::new(None);
 
+extern "C" {
+    /// Defined in `cpp/theme.cpp`: true when the desktop palette is dark. Qt 6.4 lacks
+    /// `QStyleHints::colorScheme()` (added in 6.5), so we inspect the application palette.
+    fn git_review_is_dark() -> bool;
+}
+
 #[derive(Clone, Copy, PartialEq, Default)]
 enum Showing {
     #[default]
@@ -58,6 +64,26 @@ struct FileJson {
     item_index: i32,
 }
 
+/// One row of the flattened, collapsible file tree exposed to QML. Folder rows have `is_dir`
+/// true and no counts; leaf rows carry the file's `+added −removed` and the `item_index` to
+/// scroll the diff to. `visible` is recomputed whenever a folder is toggled.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct TreeNodeJson {
+    depth: i32,
+    is_dir: bool,
+    expanded: bool,
+    visible: bool,
+    name: String,
+    icon: String,
+    added: i32,
+    removed: i32,
+    item_index: i32,
+    // index of the parent node in the flat vec (-1 for roots); used to recompute visibility.
+    #[serde(skip)]
+    parent: i32,
+}
+
 #[derive(Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct DiffItemJson {
@@ -86,6 +112,7 @@ mod qobject {
         #[qml_element]
         #[qproperty(QString, commits_json, cxx_name = "commitsJson")]
         #[qproperty(QString, files_json, cxx_name = "filesJson")]
+        #[qproperty(QString, tree_json, cxx_name = "treeJson")]
         #[qproperty(QString, diff_json, cxx_name = "diffJson")]
         #[qproperty(QString, summary)]
         #[qproperty(i32, total_added, cxx_name = "totalAdded")]
@@ -94,6 +121,7 @@ mod qobject {
         #[qproperty(bool, wrap)]
         #[qproperty(bool, show_space, cxx_name = "showSpace")]
         #[qproperty(bool, line_numbers, cxx_name = "lineNumbers")]
+        #[qproperty(bool, dark)]
         #[qproperty(i32, font)]
         type Backend = super::BackendRust;
     }
@@ -105,6 +133,8 @@ mod qobject {
         fn set_from(self: Pin<&mut Backend>, i: i32);
         #[qinvokable]
         fn set_to(self: Pin<&mut Backend>, i: i32);
+        #[qinvokable]
+        fn toggle_node(self: Pin<&mut Backend>, i: i32);
         #[qinvokable]
         fn toggle_wrap(self: Pin<&mut Backend>);
         #[qinvokable]
@@ -127,6 +157,7 @@ pub struct BackendRust {
     // --- property storage (mirrors the #[qproperty] list) ---
     commits_json: cxx_qt_lib::QString,
     files_json: cxx_qt_lib::QString,
+    tree_json: cxx_qt_lib::QString,
     diff_json: cxx_qt_lib::QString,
     summary: cxx_qt_lib::QString,
     total_added: i32,
@@ -135,6 +166,7 @@ pub struct BackendRust {
     wrap: bool,
     show_space: bool,
     line_numbers: bool,
+    dark: bool,
     font: i32,
 
     // --- non-Qt state ---
@@ -144,6 +176,8 @@ pub struct BackendRust {
     showing: Showing,
     from: Option<Oid>,
     to: Option<Oid>,
+    /// The current flattened file tree (source of truth for `tree_json`).
+    tree: Vec<TreeNodeJson>,
 }
 
 impl Default for BackendRust {
@@ -151,6 +185,7 @@ impl Default for BackendRust {
         Self {
             commits_json: cxx_qt_lib::QString::default(),
             files_json: cxx_qt_lib::QString::default(),
+            tree_json: cxx_qt_lib::QString::default(),
             diff_json: cxx_qt_lib::QString::default(),
             summary: cxx_qt_lib::QString::default(),
             total_added: 0,
@@ -159,6 +194,7 @@ impl Default for BackendRust {
             wrap: false,
             show_space: true,
             line_numbers: true,
+            dark: false,
             font: 12,
             repo: None,
             hl: None,
@@ -166,6 +202,7 @@ impl Default for BackendRust {
             showing: Showing::Working,
             from: None,
             to: None,
+            tree: Vec::new(),
         }
     }
 }
@@ -201,6 +238,12 @@ impl cxx_qt::Initialize for qobject::Backend {
             rust.repo = Some(repo);
         }
         self.as_mut().set_repo_name(cxx_qt_lib::QString::from(&name));
+
+        // Follow the desktop colour scheme (light/dark). On Qt 6.4 there is no QML colorScheme,
+        // so detection happens in C++ via the application palette; headless => light.
+        let dark = unsafe { git_review_is_dark() };
+        self.as_mut().set_dark(dark);
+
         self.rebuild();
     }
 }
@@ -238,6 +281,22 @@ impl qobject::Backend {
             self.as_mut().maybe_range();
         }
         self.rebuild();
+    }
+
+    /// Toggle a folder node's expansion, recompute every node's `visible` flag, and re-emit the
+    /// `tree_json` property so QML re-renders. Called from QML when a folder row is clicked.
+    fn toggle_node(mut self: core::pin::Pin<&mut Self>, i: i32) {
+        {
+            let mut rust = self.as_mut().rust_mut();
+            let idx = i as usize;
+            if idx >= rust.tree.len() || !rust.tree[idx].is_dir {
+                return;
+            }
+            rust.tree[idx].expanded = !rust.tree[idx].expanded;
+            recompute_visibility(&mut rust.tree);
+        }
+        let json = serde_json::to_string(&self.as_ref().rust().tree).unwrap_or_default();
+        self.as_mut().set_tree_json(cxx_qt_lib::QString::from(&json));
     }
 
     fn toggle_wrap(mut self: core::pin::Pin<&mut Self>) {
@@ -395,11 +454,18 @@ impl qobject::Backend {
         let files_json = serde_json::to_string(&files).unwrap_or_default();
         let diff_json = serde_json::to_string(&items).unwrap_or_default();
 
+        // ---- hierarchical file tree (flattened) ----
+        let tree = build_tree(&files);
+        let tree_json = serde_json::to_string(&tree).unwrap_or_default();
+        self.as_mut().rust_mut().tree = tree;
+
         // ---- push to the QObject's properties (auto-emits *_changed) ----
         self.as_mut()
             .set_commits_json(cxx_qt_lib::QString::from(&commits_json));
         self.as_mut()
             .set_files_json(cxx_qt_lib::QString::from(&files_json));
+        self.as_mut()
+            .set_tree_json(cxx_qt_lib::QString::from(&tree_json));
         self.as_mut()
             .set_diff_json(cxx_qt_lib::QString::from(&diff_json));
         self.as_mut().set_summary(cxx_qt_lib::QString::from(&summary));
@@ -437,6 +503,132 @@ fn html_escape(s: &str) -> String {
 
 fn num(n: Option<u32>) -> String {
     n.map(|v| v.to_string()).unwrap_or_default()
+}
+
+/// Intermediate tree built from the flat file list before flattening for QML.
+struct TreeBuild {
+    name: String,
+    // children directories, keyed by their (possibly collapsed) component name.
+    dirs: std::collections::BTreeMap<String, TreeBuild>,
+    // file leaves directly under this directory.
+    files: Vec<FileLeaf>,
+}
+
+struct FileLeaf {
+    name: String,
+    icon: String,
+    added: i32,
+    removed: i32,
+    item_index: i32,
+}
+
+impl TreeBuild {
+    fn new(name: String) -> Self {
+        Self {
+            name,
+            dirs: std::collections::BTreeMap::new(),
+            files: Vec::new(),
+        }
+    }
+}
+
+/// Build a real hierarchical, GitHub-style file tree from the flat `FileJson` list and flatten it
+/// into the `TreeNodeJson` rows QML renders. Directory components become folder nodes; a directory
+/// with exactly one child directory and no files is folded into its child (`a/b/c.rs`). All folders
+/// start expanded (`visible` true).
+fn build_tree(files: &[FileJson]) -> Vec<TreeNodeJson> {
+    let mut root = TreeBuild::new(String::new());
+    for f in files {
+        let comps: Vec<&str> = f.path.split('/').filter(|c| !c.is_empty()).collect();
+        if comps.is_empty() {
+            continue;
+        }
+        let (dirs, name) = comps.split_at(comps.len() - 1);
+        let mut node = &mut root;
+        for d in dirs {
+            node = node
+                .dirs
+                .entry((*d).to_string())
+                .or_insert_with(|| TreeBuild::new((*d).to_string()));
+        }
+        node.files.push(FileLeaf {
+            name: name[0].to_string(),
+            icon: f.icon.clone(),
+            added: f.added,
+            removed: f.removed,
+            item_index: f.item_index,
+        });
+    }
+
+    let mut out: Vec<TreeNodeJson> = Vec::new();
+    // emit children of the (nameless) root at depth 0.
+    emit_dir_children(&mut root, 0, -1, &mut out);
+    out
+}
+
+/// Fold single-child directory chains (GitHub-style) into one display name.
+fn fold_dir(dir: &mut TreeBuild) -> String {
+    let mut name = dir.name.clone();
+    while dir.files.is_empty() && dir.dirs.len() == 1 {
+        let child_key = dir.dirs.keys().next().unwrap().clone();
+        let child = dir.dirs.remove(&child_key).unwrap();
+        name = format!("{name}/{}", child.name);
+        *dir = child;
+        dir.name = name.clone();
+    }
+    name
+}
+
+fn emit_dir_children(dir: &mut TreeBuild, depth: i32, parent: i32, out: &mut Vec<TreeNodeJson>) {
+    // directories first (sorted by BTreeMap), then files sorted by name.
+    let keys: Vec<String> = dir.dirs.keys().cloned().collect();
+    for k in keys {
+        let mut child = dir.dirs.remove(&k).unwrap();
+        let display = fold_dir(&mut child);
+        let my_index = out.len() as i32;
+        out.push(TreeNodeJson {
+            depth,
+            is_dir: true,
+            expanded: true,
+            visible: true,
+            name: display,
+            icon: "📁".to_string(),
+            added: 0,
+            removed: 0,
+            item_index: -1,
+            parent,
+        });
+        emit_dir_children(&mut child, depth + 1, my_index, out);
+    }
+    let mut leaves: Vec<&FileLeaf> = dir.files.iter().collect();
+    leaves.sort_by(|a, b| a.name.cmp(&b.name));
+    for leaf in leaves {
+        out.push(TreeNodeJson {
+            depth,
+            is_dir: false,
+            expanded: false,
+            visible: true,
+            name: leaf.name.clone(),
+            icon: leaf.icon.clone(),
+            added: leaf.added,
+            removed: leaf.removed,
+            item_index: leaf.item_index,
+            parent,
+        });
+    }
+}
+
+/// Recompute each node's `visible` flag: a node is visible iff every ancestor folder is expanded.
+fn recompute_visibility(nodes: &mut [TreeNodeJson]) {
+    for i in 0..nodes.len() {
+        let p = nodes[i].parent;
+        nodes[i].visible = if p < 0 {
+            true
+        } else {
+            let pu = p as usize;
+            nodes[pu].visible && nodes[pu].expanded
+        };
+    }
 }
 
 fn file_icon(path: &str) -> &'static str {
