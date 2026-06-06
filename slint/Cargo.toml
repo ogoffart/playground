@@ -1,0 +1,23 @@
+[package]
+name = "git-review-slint"
+version = "0.1.0"
+edition = "2021"
+description = "A GitHub-style git code review desktop app, built with Slint"
+build = "build.rs"
+
+[[bin]]
+name = "git-review-slint"
+path = "src/main.rs"
+
+[dependencies]
+slint = "1.16"
+git2 = "0.20"
+syntect = { version = "5", default-features = false, features = ["default-fancy"] }
+two-face = "0.5"
+jiff = "0.2"
+
+[build-dependencies]
+slint-build = "1.16"
+
+[profile.dev]
+opt-level = 1
