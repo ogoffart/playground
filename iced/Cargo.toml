@@ -1,0 +1,15 @@
+[package]
+name = "git-review"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "git-review"
+path = "src/main.rs"
+
+[dependencies]
+iced = { version = "0.14", features = ["tokio"] }
+git2 = "0.20"
+syntect = { version = "5", default-features = false, features = ["default-fancy"] }
+two-face = "0.5"
+jiff = "0.2"
