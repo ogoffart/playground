@@ -29,12 +29,21 @@ impl Highlighter {
     pub fn new() -> Self {
         let syntaxes = two_face::syntax::extra_newlines();
         let themes = ThemeSet::load_defaults();
-        // A light, GitHub-like theme.
-        let theme = themes
-            .themes
-            .get("InspiredGitHub")
-            .cloned()
-            .unwrap_or_else(|| themes.themes["Solarized (light)"].clone());
+        // Track the desktop scheme: GitHub-like light vs. an Ocean-dark theme.
+        let dark = crate::IS_DARK.get().copied().unwrap_or(false);
+        let theme = if dark {
+            themes
+                .themes
+                .get("base16-ocean.dark")
+                .cloned()
+                .unwrap_or_else(|| themes.themes["Solarized (dark)"].clone())
+        } else {
+            themes
+                .themes
+                .get("InspiredGitHub")
+                .cloned()
+                .unwrap_or_else(|| themes.themes["Solarized (light)"].clone())
+        };
         Self { syntaxes, theme }
     }
 
@@ -68,7 +77,11 @@ impl Highlighter {
                 .map(|(style, piece)| to_span(style, piece))
                 .collect(),
             Err(_) => vec![Span {
-                color: (31, 35, 40),
+                color: if crate::IS_DARK.get().copied().unwrap_or(false) {
+                    (230, 237, 243)
+                } else {
+                    (31, 35, 40)
+                },
                 bold: false,
                 italic: false,
                 text: text.to_string(),

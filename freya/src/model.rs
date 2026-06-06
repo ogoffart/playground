@@ -98,7 +98,11 @@ impl RenderDiff {
                         old_no: None,
                         new_no: None,
                         spans: vec![RSpan {
-                            color: (101, 109, 118),
+                            color: if crate::IS_DARK.get().copied().unwrap_or(false) {
+                                (139, 148, 158)
+                            } else {
+                                (101, 109, 118)
+                            },
                             bold: false,
                             italic: false,
                             text: hunk.header.clone(),
