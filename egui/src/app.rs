@@ -10,20 +10,64 @@ use git2::Oid;
 use crate::git::{ChangeKind, CommitInfo, DiffSet, FileDiff, LineKind, Repo};
 use crate::highlight::Highlighter;
 
-// --- GitHub-ish palette -----------------------------------------------------
-const BG: Color32 = Color32::from_rgb(0xff, 0xff, 0xff);
-const PANEL: Color32 = Color32::from_rgb(0xf6, 0xf8, 0xfa);
-const BORDER: Color32 = Color32::from_rgb(0xd0, 0xd7, 0xde);
-const TEXT: Color32 = Color32::from_rgb(0x1f, 0x23, 0x28);
-const MUTED: Color32 = Color32::from_rgb(0x65, 0x6d, 0x76);
-const ACCENT: Color32 = Color32::from_rgb(0x09, 0x69, 0xda);
-const SEL: Color32 = Color32::from_rgb(0xdd, 0xf4, 0xff);
-const ADD_BG: Color32 = Color32::from_rgb(0xe6, 0xff, 0xec);
-const ADD_MARK: Color32 = Color32::from_rgb(0xab, 0xf2, 0xbc);
-const DEL_BG: Color32 = Color32::from_rgb(0xff, 0xeb, 0xe9);
-const DEL_MARK: Color32 = Color32::from_rgb(0xff, 0x81, 0x82);
-const ADD_FG: Color32 = Color32::from_rgb(0x1a, 0x7f, 0x37);
-const DEL_FG: Color32 = Color32::from_rgb(0xcf, 0x22, 0x2e);
+// --- GitHub-ish palettes (light + dark), selected to match the OS colour scheme ---------------
+#[derive(Clone, Copy)]
+struct Palette {
+    dark: bool,
+    bg: Color32,
+    panel: Color32,
+    border: Color32,
+    text: Color32,
+    muted: Color32,
+    accent: Color32,
+    sel: Color32,
+    add_bg: Color32,
+    add_mark: Color32,
+    del_bg: Color32,
+    del_mark: Color32,
+    add_fg: Color32,
+    del_fg: Color32,
+}
+
+const fn rgb(r: u8, g: u8, b: u8) -> Color32 {
+    Color32::from_rgb(r, g, b)
+}
+
+impl Palette {
+    const LIGHT: Palette = Palette {
+        dark: false,
+        bg: rgb(0xff, 0xff, 0xff),
+        panel: rgb(0xf6, 0xf8, 0xfa),
+        border: rgb(0xd0, 0xd7, 0xde),
+        text: rgb(0x1f, 0x23, 0x28),
+        muted: rgb(0x65, 0x6d, 0x76),
+        accent: rgb(0x09, 0x69, 0xda),
+        sel: rgb(0xdd, 0xf4, 0xff),
+        add_bg: rgb(0xe6, 0xff, 0xec),
+        add_mark: rgb(0xab, 0xf2, 0xbc),
+        del_bg: rgb(0xff, 0xeb, 0xe9),
+        del_mark: rgb(0xff, 0x81, 0x82),
+        add_fg: rgb(0x1a, 0x7f, 0x37),
+        del_fg: rgb(0xcf, 0x22, 0x2e),
+    };
+
+    const DARK: Palette = Palette {
+        dark: true,
+        bg: rgb(0x0d, 0x11, 0x17),
+        panel: rgb(0x16, 0x1b, 0x22),
+        border: rgb(0x30, 0x36, 0x3d),
+        text: rgb(0xe6, 0xed, 0xf3),
+        muted: rgb(0x8b, 0x94, 0x9e),
+        accent: rgb(0x2f, 0x81, 0xf7),
+        sel: rgb(0x1f, 0x6f, 0xeb),
+        add_bg: rgb(0x12, 0x26, 0x1e),
+        add_mark: rgb(0x2e, 0xa0, 0x43),
+        del_bg: rgb(0x25, 0x17, 0x1c),
+        del_mark: rgb(0xf8, 0x51, 0x49),
+        add_fg: rgb(0x3f, 0xb9, 0x50),
+        del_fg: rgb(0xf8, 0x51, 0x49),
+    };
+}
 
 struct Settings {
     word_wrap: bool,
@@ -50,6 +94,18 @@ enum Showing {
     Range(Oid, Oid),
 }
 
+/// A node in the hierarchical file tree built from `FileDiff.path`.
+enum TreeNode {
+    /// A folder: a (possibly collapsed `a/b/c`) directory label and its children.
+    Dir {
+        name: String,
+        id: Id,
+        children: Vec<TreeNode>,
+    },
+    /// A file leaf, with the index into `diff.files`.
+    File { name: String, file_idx: usize },
+}
+
 pub struct App {
     repo: Repo,
     hl: Highlighter,
@@ -62,6 +118,8 @@ pub struct App {
     settings: Settings,
     scroll_to_file: Option<usize>,
     error: Option<String>,
+    pal: Palette,
+    style_dark: Option<bool>,
 }
 
 impl App {
@@ -86,9 +144,23 @@ impl App {
             settings: Settings::default(),
             scroll_to_file: None,
             error: None,
+            pal: Palette::LIGHT,
+            style_dark: None,
         };
         app.recompute();
         app
+    }
+
+    /// Follow the OS colour scheme: `ctx.system_theme()` is `Some` when the desktop reports a
+    /// preference, and `None` headless — in which case we default to light (per the spec).
+    fn sync_theme(&mut self, ctx: &egui::Context) {
+        let dark = matches!(ctx.system_theme(), Some(egui::Theme::Dark));
+        self.pal = if dark { Palette::DARK } else { Palette::LIGHT };
+        self.hl.set_dark(dark);
+        if self.style_dark != Some(dark) {
+            install_style(ctx, &self.pal);
+            self.style_dark = Some(dark);
+        }
     }
 
     fn recompute(&mut self) {
@@ -116,6 +188,7 @@ impl App {
 
     // --- toolbar ------------------------------------------------------------
     fn toolbar(&mut self, ui: &mut egui::Ui) {
+        let pal = self.pal;
         ui.horizontal(|ui| {
             ui.add_space(8.0);
             // left: summary
@@ -123,28 +196,28 @@ impl App {
                 egui::RichText::new(&self.diff.summary)
                     .monospace()
                     .strong()
-                    .color(TEXT),
+                    .color(pal.text),
             );
-            ui.label(egui::RichText::new(format!("+{}", self.diff.added)).color(ADD_FG));
-            ui.label(egui::RichText::new(format!("−{}", self.diff.removed)).color(DEL_FG));
+            ui.label(egui::RichText::new(format!("+{}", self.diff.added)).color(pal.add_fg));
+            ui.label(egui::RichText::new(format!("−{}", self.diff.removed)).color(pal.del_fg));
 
             // right: tool buttons
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                 let mut changed = false;
-                if tool(ui, "#", "Show line numbers", self.settings.line_numbers).clicked() {
+                if tool(ui, pal, "#", "Show line numbers", self.settings.line_numbers).clicked() {
                     self.settings.line_numbers = !self.settings.line_numbers;
                 }
-                if tool(ui, "A+", "Increase font size", false).clicked() {
+                if tool(ui, pal, "A+", "Increase font size", false).clicked() {
                     self.settings.font_size = (self.settings.font_size + 1.0).min(28.0);
                 }
-                if tool(ui, "A-", "Decrease font size", false).clicked() {
+                if tool(ui, pal, "A-", "Decrease font size", false).clicked() {
                     self.settings.font_size = (self.settings.font_size - 1.0).max(8.0);
                 }
-                if tool(ui, "␣", "Show space changes", self.settings.show_space).clicked() {
+                if tool(ui, pal, "␣", "Show space changes", self.settings.show_space).clicked() {
                     self.settings.show_space = !self.settings.show_space;
                     changed = true;
                 }
-                if tool(ui, "⤶", "Word wrap", self.settings.word_wrap).clicked() {
+                if tool(ui, pal, "⤶", "Word wrap", self.settings.word_wrap).clicked() {
                     self.settings.word_wrap = !self.settings.word_wrap;
                 }
                 if changed {
@@ -156,6 +229,7 @@ impl App {
 
     // --- commit list --------------------------------------------------------
     fn commit_list(&mut self, ui: &mut egui::Ui) {
+        let pal = self.pal;
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.add_space(8.0);
@@ -163,7 +237,7 @@ impl App {
                 egui::RichText::new(format!("COMMITS · {}", self.repo_name))
                     .small()
                     .strong()
-                    .color(MUTED),
+                    .color(pal.muted),
             );
         });
         egui::ScrollArea::vertical()
@@ -178,6 +252,7 @@ impl App {
     }
 
     fn commit_row(&mut self, ui: &mut egui::Ui, c: &CommitInfo) {
+        let pal = self.pal;
         let is_current = match (self.showing, c.oid) {
             (Showing::Working, _) if c.is_working_tree() => true,
             (Showing::Commit(o), Some(oid)) => o == oid,
@@ -187,18 +262,22 @@ impl App {
         let is_to = c.oid.is_some() && c.oid == self.to;
 
         let frame = egui::Frame::new()
-            .fill(if is_current { SEL } else { Color32::TRANSPARENT })
+            .fill(if is_current {
+                pal.sel
+            } else {
+                Color32::TRANSPARENT
+            })
             .inner_margin(egui::Margin::symmetric(8, 5));
         frame.show(ui, |ui| {
             ui.set_width(ui.available_width());
             // line 1: endpoint buttons + sha + date + author
             ui.horizontal(|ui| {
                 if let Some(oid) = c.oid {
-                    if endpoint(ui, "◀", "Compare from this commit", is_from).clicked() {
+                    if endpoint(ui, pal, "◀", "Compare from this commit", is_from).clicked() {
                         self.from = Some(oid);
                         self.maybe_range();
                     }
-                    if endpoint(ui, "▶", "Compare to this commit", is_to).clicked() {
+                    if endpoint(ui, pal, "▶", "Compare to this commit", is_to).clicked() {
                         self.to = Some(oid);
                         self.maybe_range();
                     }
@@ -208,19 +287,20 @@ impl App {
                 ui.label(
                     egui::RichText::new(&c.short)
                         .monospace()
-                        .color(ACCENT)
+                        .color(pal.accent)
                         .size(11.0),
                 );
-                ui.label(egui::RichText::new(&c.date).small().color(MUTED));
+                ui.label(egui::RichText::new(&c.date).small().color(pal.muted));
                 ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                    ui.add(egui::Label::new(
-                        egui::RichText::new(&c.author).small().color(MUTED),
-                    ).truncate());
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(&c.author).small().color(pal.muted))
+                            .truncate(),
+                    );
                 });
             });
             // line 2: title (clickable)
             let title = ui.add(
-                egui::Label::new(egui::RichText::new(&c.title).color(TEXT))
+                egui::Label::new(egui::RichText::new(&c.title).color(pal.text))
                     .truncate()
                     .sense(Sense::click()),
             );
@@ -242,6 +322,7 @@ impl App {
 
     // --- file tree ----------------------------------------------------------
     fn file_tree(&mut self, ui: &mut egui::Ui) {
+        let pal = self.pal;
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.add_space(8.0);
@@ -249,55 +330,105 @@ impl App {
                 egui::RichText::new(format!("FILES ({})", self.diff.files.len()))
                     .small()
                     .strong()
-                    .color(MUTED),
+                    .color(pal.muted),
             );
         });
+        let roots = build_tree(&self.diff.files);
         egui::ScrollArea::vertical()
             .id_salt("files")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                for (i, f) in self.diff.files.iter().enumerate() {
-                    let resp = ui
-                        .horizontal(|ui| {
-                            ui.add_space(8.0);
-                            ui.label(file_icon(&f.path));
-                            ui.add(
-                                egui::Label::new(egui::RichText::new(&f.path).color(TEXT).size(12.0))
-                                    .truncate(),
-                            );
-                            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                                ui.label(
-                                    egui::RichText::new(format!("−{}", f.removed))
-                                        .small()
-                                        .color(DEL_FG),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!("+{}", f.added))
-                                        .small()
-                                        .color(ADD_FG),
-                                );
-                            });
-                        })
-                        .response
-                        .interact(Sense::click());
-                    if resp.clicked() {
-                        self.scroll_to_file = Some(i);
-                    }
-                    if resp.hovered() {
-                        ui.painter().rect_filled(
-                            resp.rect,
-                            0.0,
-                            Color32::from_rgba_unmultiplied(9, 105, 218, 18),
-                        );
-                    }
+                ui.spacing_mut().item_spacing.y = 1.0;
+                for node in &roots {
+                    self.tree_node(ui, node, 0);
                 }
             });
+    }
+
+    /// Render one tree node (folder or file leaf) at the given indentation depth.
+    fn tree_node(&mut self, ui: &mut egui::Ui, node: &TreeNode, depth: usize) {
+        let pal = self.pal;
+        let indent = 8.0 + depth as f32 * 14.0;
+        match node {
+            TreeNode::Dir { name, id, children } => {
+                // Collapsing state, expanded by default.
+                let mut open = ui
+                    .data_mut(|d| d.get_temp::<bool>(*id))
+                    .unwrap_or(true);
+                let resp = ui
+                    .horizontal(|ui| {
+                        ui.add_space(indent);
+                        ui.label(
+                            egui::RichText::new(if open { "▾" } else { "▸" })
+                                .size(11.0)
+                                .color(pal.muted),
+                        );
+                        ui.label(egui::RichText::new("📁").size(13.0));
+                        ui.label(
+                            egui::RichText::new(format!("{name}/"))
+                                .color(pal.text)
+                                .size(12.0)
+                                .strong(),
+                        );
+                    })
+                    .response
+                    .interact(Sense::click());
+                if resp.hovered() {
+                    ui.painter().rect_filled(resp.rect, 0.0, hover_tint(pal));
+                }
+                if resp.clicked() {
+                    open = !open;
+                    ui.data_mut(|d| d.insert_temp(*id, open));
+                }
+                if open {
+                    for child in children {
+                        self.tree_node(ui, child, depth + 1);
+                    }
+                }
+            }
+            TreeNode::File { name, file_idx } => {
+                let f = &self.diff.files[*file_idx];
+                let added = f.added;
+                let removed = f.removed;
+                let resp = ui
+                    .horizontal(|ui| {
+                        ui.add_space(indent + 14.0); // align past the disclosure column
+                        ui.label(file_icon(name));
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(name).color(pal.text).size(12.0),
+                            )
+                            .truncate(),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(format!("−{removed}"))
+                                    .small()
+                                    .color(pal.del_fg),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("+{added}"))
+                                    .small()
+                                    .color(pal.add_fg),
+                            );
+                        });
+                    })
+                    .response
+                    .interact(Sense::click());
+                if resp.clicked() {
+                    self.scroll_to_file = Some(*file_idx);
+                }
+                if resp.hovered() {
+                    ui.painter().rect_filled(resp.rect, 0.0, hover_tint(pal));
+                }
+            }
+        }
     }
 
     // --- diff view ----------------------------------------------------------
     fn diff_view(&mut self, ui: &mut egui::Ui) {
         if let Some(err) = &self.error {
-            ui.colored_label(DEL_FG, format!("Error: {err}"));
+            ui.colored_label(self.pal.del_fg, format!("Error: {err}"));
             return;
         }
 
@@ -314,7 +445,7 @@ impl App {
 
             // commit message (single-commit view only)
             if let Some(msg) = &self.diff.message {
-                commit_message_ui(ui, msg);
+                commit_message_ui(ui, self.pal, msg);
             }
 
             let files = self.diff.files.clone();
@@ -354,9 +485,10 @@ impl App {
 
     /// Draw a file header bar; returns its rect. `sticky` tweaks the shadow/border.
     fn file_header(&self, ui: &mut egui::Ui, f: &FileDiff, sticky: bool) -> Rect {
+        let pal = self.pal;
         let frame = egui::Frame::new()
-            .fill(PANEL)
-            .stroke(Stroke::new(1.0, BORDER))
+            .fill(pal.panel)
+            .stroke(Stroke::new(1.0, pal.border))
             .inner_margin(egui::Margin::symmetric(10, 6));
         let resp = frame
             .show(ui, |ui| {
@@ -367,15 +499,24 @@ impl App {
                         (Some(old), ChangeKind::Renamed) => format!("{old}  →  {}", f.path),
                         _ => f.path.clone(),
                     };
-                    ui.label(egui::RichText::new(label).strong().color(TEXT).size(12.5));
+                    ui.label(
+                        egui::RichText::new(label)
+                            .strong()
+                            .color(pal.text)
+                            .size(12.5),
+                    );
                     ui.label(
                         egui::RichText::new(format!("[{}]", f.kind.letter()))
                             .small()
-                            .color(MUTED),
+                            .color(pal.muted),
                     );
                     ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                        ui.label(egui::RichText::new(format!("−{}", f.removed)).color(DEL_FG));
-                        ui.label(egui::RichText::new(format!("+{}", f.added)).color(ADD_FG));
+                        ui.label(
+                            egui::RichText::new(format!("−{}", f.removed)).color(pal.del_fg),
+                        );
+                        ui.label(
+                            egui::RichText::new(format!("+{}", f.added)).color(pal.add_fg),
+                        );
                     });
                 });
             })
@@ -394,7 +535,11 @@ impl App {
         if f.binary {
             ui.horizontal(|ui| {
                 ui.add_space(12.0);
-                ui.label(egui::RichText::new("Binary file not shown").italics().color(MUTED));
+                ui.label(
+                    egui::RichText::new("Binary file not shown")
+                        .italics()
+                        .color(self.pal.muted),
+                );
             });
             return;
         }
@@ -428,6 +573,7 @@ impl App {
         syntax: Option<&syntect::parsing::SyntaxReference>,
         hunk_header: bool,
     ) {
+        let pal = self.pal;
         let fs = self.settings.font_size;
         let char_w = fs * 0.6;
         let num_w = char_w * 4.0;
@@ -440,8 +586,8 @@ impl App {
         let code_x_pad = 6.0;
 
         let (bg, mark, sign) = match kind {
-            LineKind::Added => (ADD_BG, ADD_MARK, '+'),
-            LineKind::Removed => (DEL_BG, DEL_MARK, '-'),
+            LineKind::Added => (pal.add_bg, pal.add_mark, '+'),
+            LineKind::Removed => (pal.del_bg, pal.del_mark, '-'),
             LineKind::Context => (Color32::TRANSPARENT, Color32::TRANSPARENT, ' '),
         };
 
@@ -453,12 +599,12 @@ impl App {
             f32::INFINITY
         };
         let job = if hunk_header {
-            simple_job(text, fs, MUTED, wrap_width)
+            simple_job(text, fs, pal.muted, wrap_width)
         } else if let Some(syntax) = syntax {
             let spans = self.hl.line(syntax, text);
-            spans_job(&spans, fs, wrap_width)
+            spans_job(&spans, fs, pal.text, wrap_width)
         } else {
-            simple_job(text, fs, TEXT, wrap_width)
+            simple_job(text, fs, pal.text, wrap_width)
         };
         let galley = ui.painter().layout_job(job);
         let row_h = galley.size().y.max(fs * 1.35);
@@ -474,7 +620,7 @@ impl App {
         let p = ui.painter_at(rect);
 
         if hunk_header {
-            p.rect_filled(rect, 0.0, Color32::from_rgb(0xdd, 0xf4, 0xff));
+            p.rect_filled(rect, 0.0, pal.sel);
         } else if bg != Color32::TRANSPARENT {
             p.rect_filled(rect, 0.0, bg);
             // stronger marker strip on the sign column
@@ -494,7 +640,7 @@ impl App {
                     Align2::RIGHT_TOP,
                     n.to_string(),
                     mono.clone(),
-                    MUTED,
+                    pal.muted,
                 );
             }
             if let Some(n) = new_no {
@@ -503,7 +649,7 @@ impl App {
                     Align2::RIGHT_TOP,
                     n.to_string(),
                     mono.clone(),
-                    MUTED,
+                    pal.muted,
                 );
             }
         }
@@ -513,10 +659,18 @@ impl App {
                 Align2::LEFT_TOP,
                 sign.to_string(),
                 mono,
-                if kind == LineKind::Added { ADD_FG } else { DEL_FG },
+                if kind == LineKind::Added {
+                    pal.add_fg
+                } else {
+                    pal.del_fg
+                },
             );
         }
-        p.galley(Pos2::new(rect.left() + gutter + code_x_pad, top), galley, TEXT);
+        p.galley(
+            Pos2::new(rect.left() + gutter + code_x_pad, top),
+            galley,
+            pal.text,
+        );
     }
 }
 
@@ -524,62 +678,161 @@ impl eframe::App for App {
     // eframe 0.34 makes `ui` the required method: the whole app is driven from a root `Ui`, and
     // panels are carved out of it with `show_inside`.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        install_style(ui.ctx());
+        self.sync_theme(ui.ctx());
+        let pal = self.pal;
+
+        // The toolbar is added FIRST at the top level, so it spans the FULL window width above
+        // both the side panel and the diff. The left panel is carved out of the remaining area.
+        egui::Panel::top("toolbar")
+            .frame(
+                egui::Frame::new()
+                    .fill(pal.panel)
+                    .stroke(Stroke::new(1.0, pal.border))
+                    .inner_margin(egui::Margin::symmetric(6, 6)),
+            )
+            .show_inside(ui, |ui| self.toolbar(ui));
 
         egui::Panel::left("side")
             .resizable(true)
             .default_size(320.0)
             .size_range(220.0..=600.0)
-            .frame(egui::Frame::new().fill(PANEL))
+            .frame(egui::Frame::new().fill(pal.panel))
             .show_inside(ui, |ui| {
                 egui::Panel::top("commits_panel")
                     .resizable(true)
                     .default_size(360.0)
-                    .frame(egui::Frame::new().fill(PANEL))
+                    .frame(egui::Frame::new().fill(pal.panel))
                     .show_inside(ui, |ui| self.commit_list(ui));
                 egui::CentralPanel::default()
-                    .frame(egui::Frame::new().fill(PANEL))
+                    .frame(egui::Frame::new().fill(pal.panel))
                     .show_inside(ui, |ui| self.file_tree(ui));
             });
 
-        egui::Panel::top("toolbar")
-            .frame(
-                egui::Frame::new()
-                    .fill(BG)
-                    .inner_margin(egui::Margin::symmetric(6, 6)),
-            )
-            .show_inside(ui, |ui| self.toolbar(ui));
-
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(BG))
+            .frame(egui::Frame::new().fill(pal.bg))
             .show_inside(ui, |ui| self.diff_view(ui));
     }
 }
 
-// --- small widgets ----------------------------------------------------------
+// --- file tree construction -------------------------------------------------
 
-fn tool(ui: &mut egui::Ui, label: &str, tip: &str, active: bool) -> egui::Response {
-    let mut text = egui::RichText::new(label).monospace();
-    if active {
-        text = text.color(ACCENT).strong();
+/// Build a hierarchical tree from the flat list of file paths. Directory components become
+/// folder nodes; a single-child directory chain is collapsed GitHub-style into one node
+/// (`a/b/c`); distinct subtrees branch.
+fn build_tree(files: &[FileDiff]) -> Vec<TreeNode> {
+    // Intermediate mutable tree keyed by component name, preserving insertion order.
+    #[derive(Default)]
+    struct Builder {
+        dirs: Vec<(String, Builder)>,
+        files: Vec<(String, usize)>,
     }
-    ui.add(egui::Button::new(text).fill(if active { SEL } else { Color32::TRANSPARENT }))
-        .on_hover_text(tip)
+    impl Builder {
+        fn child(&mut self, name: &str) -> &mut Builder {
+            if let Some(pos) = self.dirs.iter().position(|(n, _)| n == name) {
+                &mut self.dirs[pos].1
+            } else {
+                self.dirs.push((name.to_string(), Builder::default()));
+                &mut self.dirs.last_mut().unwrap().1
+            }
+        }
+    }
+
+    let mut root = Builder::default();
+    for (idx, f) in files.iter().enumerate() {
+        let parts: Vec<&str> = f.path.split('/').filter(|s| !s.is_empty()).collect();
+        if parts.is_empty() {
+            continue;
+        }
+        let mut cur = &mut root;
+        for comp in &parts[..parts.len() - 1] {
+            cur = cur.child(comp);
+        }
+        cur.files.push((parts[parts.len() - 1].to_string(), idx));
+    }
+
+    fn convert(name_prefix: &str, b: Builder, path: &str) -> Vec<TreeNode> {
+        let mut out = Vec::new();
+        let _ = name_prefix;
+        for (name, mut sub) in b.dirs {
+            // Collapse single-child dir chains: a dir with exactly one child dir and no files
+            // folds into "name/childname".
+            let mut label = name;
+            let mut full = format!("{path}/{label}");
+            while sub.files.is_empty() && sub.dirs.len() == 1 {
+                let (cn, cb) = sub.dirs.pop().unwrap();
+                label = format!("{label}/{cn}");
+                full = format!("{path}/{label}");
+                sub = cb;
+            }
+            let children = convert(&label, sub, &full);
+            out.push(TreeNode::Dir {
+                name: label,
+                id: Id::new(("tree-dir", full)),
+                children,
+            });
+        }
+        for (name, idx) in b.files {
+            out.push(TreeNode::File {
+                name,
+                file_idx: idx,
+            });
+        }
+        out
+    }
+
+    convert("", root, "")
 }
 
-fn endpoint(ui: &mut egui::Ui, label: &str, tip: &str, active: bool) -> egui::Response {
+// --- small widgets ----------------------------------------------------------
+
+fn hover_tint(pal: Palette) -> Color32 {
+    if pal.dark {
+        Color32::from_rgba_unmultiplied(0x2f, 0x81, 0xf7, 28)
+    } else {
+        Color32::from_rgba_unmultiplied(9, 105, 218, 18)
+    }
+}
+
+fn tool(ui: &mut egui::Ui, pal: Palette, label: &str, tip: &str, active: bool) -> egui::Response {
+    let mut text = egui::RichText::new(label).monospace();
+    if active {
+        text = text.color(pal.accent).strong();
+    } else {
+        text = text.color(pal.text);
+    }
+    let fill = if active {
+        pal.sel
+    } else if pal.dark {
+        Color32::from_rgb(0x21, 0x26, 0x2d)
+    } else {
+        Color32::from_rgb(0xf6, 0xf8, 0xfa)
+    };
     ui.add(
-        egui::Button::new(egui::RichText::new(label).size(10.0))
-            .small()
-            .fill(if active { ACCENT } else { Color32::from_gray(230) }),
+        egui::Button::new(text)
+            .fill(fill)
+            .stroke(Stroke::new(1.0, pal.border)),
     )
     .on_hover_text(tip)
 }
 
-fn commit_message_ui(ui: &mut egui::Ui, msg: &crate::git::CommitMessage) {
+fn endpoint(ui: &mut egui::Ui, pal: Palette, label: &str, tip: &str, active: bool) -> egui::Response {
+    let inactive = if pal.dark {
+        Color32::from_gray(60)
+    } else {
+        Color32::from_gray(230)
+    };
+    ui.add(
+        egui::Button::new(egui::RichText::new(label).size(10.0))
+            .small()
+            .fill(if active { pal.accent } else { inactive }),
+    )
+    .on_hover_text(tip)
+}
+
+fn commit_message_ui(ui: &mut egui::Ui, pal: Palette, msg: &crate::git::CommitMessage) {
     egui::Frame::new()
-        .fill(PANEL)
-        .stroke(Stroke::new(1.0, BORDER))
+        .fill(pal.panel)
+        .stroke(Stroke::new(1.0, pal.border))
         .inner_margin(12)
         .outer_margin(egui::Margin {
             left: 0,
@@ -589,25 +842,33 @@ fn commit_message_ui(ui: &mut egui::Ui, msg: &crate::git::CommitMessage) {
         })
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(egui::RichText::new(&msg.title).heading().color(TEXT));
+            ui.label(egui::RichText::new(&msg.title).heading().color(pal.text));
             ui.add_space(2.0);
             ui.label(
                 egui::RichText::new(format!("{}  ·  {}  ·  {}", msg.author, msg.date, msg.short))
                     .small()
-                    .color(MUTED),
+                    .color(pal.muted),
             );
             if !msg.body.is_empty() {
                 ui.add_space(8.0);
-                ui.label(egui::RichText::new(&msg.body).monospace().color(TEXT));
+                ui.label(egui::RichText::new(&msg.body).monospace().color(pal.text));
             }
         });
 }
 
-fn spans_job(spans: &[crate::highlight::Span], fs: f32, wrap_width: f32) -> LayoutJob {
+fn spans_job(spans: &[crate::highlight::Span], fs: f32, fallback: Color32, wrap_width: f32) -> LayoutJob {
     let mut job = LayoutJob::default();
     job.wrap.max_width = wrap_width;
     if spans.is_empty() {
-        job.append(" ", 0.0, fmt((31, 35, 40), fs, false, false));
+        job.append(
+            " ",
+            0.0,
+            TextFormat {
+                font_id: FontId::monospace(fs),
+                color: fallback,
+                ..Default::default()
+            },
+        );
         return job;
     }
     for s in spans {
@@ -671,14 +932,19 @@ fn empty_diff() -> DiffSet {
     }
 }
 
-fn install_style(ctx: &egui::Context) {
+fn install_style(ctx: &egui::Context, pal: &Palette) {
     use egui::FontFamily::Proportional;
     use egui::TextStyle::*;
     let mut style = (*ctx.global_style()).clone();
-    style.visuals.panel_fill = BG;
-    style.visuals.window_fill = BG;
-    style.visuals.override_text_color = Some(TEXT);
-    style.visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, BORDER);
+    style.visuals = if pal.dark {
+        egui::Visuals::dark()
+    } else {
+        egui::Visuals::light()
+    };
+    style.visuals.panel_fill = pal.bg;
+    style.visuals.window_fill = pal.bg;
+    style.visuals.override_text_color = Some(pal.text);
+    style.visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, pal.border);
     style.text_styles.insert(Heading, FontId::new(18.0, Proportional));
     style.spacing.scroll = egui::style::ScrollStyle::solid();
     ctx.set_global_style(style);

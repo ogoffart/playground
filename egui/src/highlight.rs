@@ -22,20 +22,45 @@ pub struct Span {
 
 pub struct Highlighter {
     syntaxes: SyntaxSet,
-    theme: Theme,
+    light: Theme,
+    dark: Theme,
+    dark_mode: bool,
 }
 
 impl Highlighter {
     pub fn new() -> Self {
         let syntaxes = two_face::syntax::extra_newlines();
         let themes = ThemeSet::load_defaults();
-        // A light, GitHub-like theme.
-        let theme = themes
+        // A light, GitHub-like theme, and a dark counterpart, selected to match the OS scheme.
+        let light = themes
             .themes
             .get("InspiredGitHub")
             .cloned()
             .unwrap_or_else(|| themes.themes["Solarized (light)"].clone());
-        Self { syntaxes, theme }
+        let dark = themes
+            .themes
+            .get("base16-ocean.dark")
+            .cloned()
+            .unwrap_or_else(|| themes.themes["Solarized (dark)"].clone());
+        Self {
+            syntaxes,
+            light,
+            dark,
+            dark_mode: false,
+        }
+    }
+
+    /// Switch the syntax-highlight theme to track the UI colour scheme.
+    pub fn set_dark(&mut self, dark: bool) {
+        self.dark_mode = dark;
+    }
+
+    fn theme(&self) -> &Theme {
+        if self.dark_mode {
+            &self.dark
+        } else {
+            &self.light
+        }
     }
 
     /// Pick a syntax by file path/extension, falling back to plain text.
@@ -61,7 +86,7 @@ impl Highlighter {
         if text.is_empty() {
             return Vec::new();
         }
-        let mut h = HighlightLines::new(syntax, &self.theme);
+        let mut h = HighlightLines::new(syntax, self.theme());
         match h.highlight_line(text, &self.syntaxes) {
             Ok(ranges) => ranges
                 .into_iter()
