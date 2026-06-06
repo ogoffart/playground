@@ -5,18 +5,21 @@
 //! * UI is declared in a single `live_design!{}` DSL block. The chrome (window, toolbar,
 //!   side panel, splitters) is composed from stock `makepad-widgets` (`View`, `Button`,
 //!   `Label`, `Splitter`, `PortalList`).
+//! * The root is a *vertical* `View`: a full-width **toolbar** pinned at the very top
+//!   (above everything), a 1px border, then a horizontal `Splitter` holding the
+//!   resizable side panel (commits over file tree) and the diff body.
 //! * The three scrollable lists (commits, file tree, diff body) are virtualized
 //!   `PortalList`s. We flatten the diff into a `Vec<Row>` so the diff body — commit
 //!   message, per-file headers, hunk headers and code lines — is a single uniform list
-//!   that PortalList can recycle widgets across.
+//!   that PortalList can recycle widgets across. The file tree is likewise flattened
+//!   from a real hierarchical tree into a `Vec<TreeNode>` of only the *visible* rows.
 //! * Per-line backgrounds and per-span syntax colors are not expressible with a stock
 //!   `Label` (single color). So `DiffRow` is a small custom `Widget` that draws a
 //!   background quad (`DrawColor`) plus the gutter and each highlight span with its own
-//!   color via a `DrawText` instance. This is the GitHub red/green line + colored token
-//!   look from the SPEC.
-//! * Resizable panels use the real `Splitter` widget (it owns its own drag handling),
-//!   giving the horizontally-resizable side panel and the vertically-split
-//!   commits/files panes from the SPEC.
+//!   color via a `DrawText` instance.
+//! * Colours follow the **system light/dark scheme** (via the `dark-light` crate). Makepad
+//!   bakes DSL colors at live-design time, so instead we hold the chosen GitHub `Palette`
+//!   in Rust and feed it into every widget at startup (`apply_over`) and into `DiffRow`.
 
 use makepad_widgets::*;
 
@@ -32,7 +35,9 @@ live_design! {
     use link::shaders::*;
     use link::widgets::*;
 
-    // ---- palette (GitHub light, from SPEC.md) ------------------------------
+    // ---- placeholder palette (overwritten at startup from the system theme) -
+    // These DSL values are only the initial look; the real palette is applied in
+    // Rust via `apply_over` once `dark-light` has been queried.
     BG = #ffffff
     PANEL = #f6f8fa
     BORDER = #d0d7de
@@ -42,6 +47,7 @@ live_design! {
     SEL = #ddf4ff
     ADD_FG_DSL = #1a7f37
     DEL_FG_DSL = #cf222e
+    TOOLBAR_BG = #f6f8fa
 
     // A flat tool/toggle button used in the toolbar and commit endpoints.
     ToolBtn = <Button> {
@@ -50,21 +56,27 @@ live_design! {
         margin: { left: 2 }
         draw_bg: {
             instance active: 0.0
+            instance c_bg: vec4(1.0, 1.0, 1.0, 1.0)
+            instance c_sel: vec4(0.866, 0.956, 1.0, 1.0)
+            instance c_border: vec4(0.816, 0.843, 0.871, 1.0)
+            instance c_accent: vec4(0.035, 0.412, 0.855, 1.0)
             fn pixel(self) -> vec4 {
                 let sdf = Sdf2d::viewport(self.pos * self.rect_size);
                 sdf.box(0.5, 0.5, self.rect_size.x - 1.0, self.rect_size.y - 1.0, 4.0);
-                let base = mix((BG), (SEL), self.active);
-                let bg = mix(base, (SEL), self.hover * 0.6);
+                let base = mix(self.c_bg, self.c_sel, self.active);
+                let bg = mix(base, self.c_sel, self.hover * 0.6);
                 sdf.fill_keep(bg);
-                sdf.stroke(mix((BORDER), (ACCENT), self.active), 1.0);
+                sdf.stroke(mix(self.c_border, self.c_accent, self.active), 1.0);
                 return sdf.result;
             }
         }
         draw_text: {
             instance active: 0.0
+            instance c_text: vec4(0.122, 0.137, 0.157, 1.0)
+            instance c_accent: vec4(0.035, 0.412, 0.855, 1.0)
             text_style: <THEME_FONT_REGULAR> { font_size: 11.0 }
             fn get_color(self) -> vec4 {
-                return mix((TEXTCOL), (ACCENT), self.active);
+                return mix(self.c_text, self.c_accent, self.active);
             }
         }
     }
@@ -100,13 +112,17 @@ live_design! {
         sep = <View> { width: Fill, height: 1, show_bg: true, draw_bg: { color: (BORDER) } margin: { top: 4 } }
     }
 
-    // ---- file tree row ----------------------------------------------------
-    FileRow = <View> {
-        width: Fill, height: Fit, flow: Right, align: { y: 0.5 }, spacing: 4
-        padding: { left: 10, right: 8, top: 3, bottom: 3 }
+    // ---- file tree row (folder or leaf) -----------------------------------
+    // `indent` is a fixed-width spacer the draw code resizes per depth; `arrow`
+    // shows a disclosure triangle for folders (blank for leaves).
+    TreeRow = <View> {
+        width: Fill, height: Fit, flow: Right, align: { y: 0.5 }, spacing: 3
+        padding: { left: 4, right: 8, top: 3, bottom: 3 }
         show_bg: true,
         draw_bg: { color: (PANEL) }
         cursor: Hand,
+        indent = <View> { width: 0, height: 1 }
+        arrow = <Label> { width: 12, draw_text: { color: (MUTED), text_style: { font_size: 10.0 } } text: "" }
         icon = <Label> { width: Fit, draw_text: { text_style: { font_size: 12.0 } } text: "" }
         name = <Label> { width: Fit, draw_text: { color: (TEXTCOL), wrap: Ellipsis, text_style: { font_size: 12.0 } } text: "" }
         ffiller = <View> { width: Fill, height: 1 }
@@ -124,12 +140,33 @@ live_design! {
     App = {{App}} {
         ui: <Root> {
             main_window = <Window> {
-                window: { inner_size: vec2(1280, 860), title: "git-review (Makepad)" }
+                window: { inner_size: vec2(1280, 800), position: vec2(0, 0), title: "git-review (Makepad)" }
                 body = <View> {
-                    width: Fill, height: Fill, flow: Right,
+                    width: Fill, height: Fill, flow: Down,
                     show_bg: true, draw_bg: { color: (BG) }
 
-                    // horizontally-resizable side panel | main view
+                    // ---- full-width toolbar pinned at the very top ----------
+                    toolbar = <View> {
+                        width: Fill, height: Fit, flow: Right, align: { y: 0.5 }
+                        padding: { left: 10, right: 8, top: 6, bottom: 6 }
+                        spacing: 6,
+                        show_bg: true, draw_bg: { color: (TOOLBAR_BG) }
+                        summary = <Label> {
+                            draw_text: { color: (TEXTCOL), text_style: <THEME_FONT_BOLD> { font_size: 12.0 } }
+                            text: ""
+                        }
+                        t_add = <Label> { draw_text: { color: (ADD_FG_DSL), text_style: { font_size: 12.0 } } text: "" }
+                        t_del = <Label> { draw_text: { color: (DEL_FG_DSL), text_style: { font_size: 12.0 } } text: "" }
+                        tfiller = <View> { width: Fill, height: 1 }
+                        btn_wrap = <ToolBtn> { text: "⤶" }
+                        btn_space = <ToolBtn> { text: "␣" }
+                        btn_fdec = <ToolBtn> { text: "A-" }
+                        btn_finc = <ToolBtn> { text: "A+" }
+                        btn_lines = <ToolBtn> { text: "#" }
+                    }
+                    tsep = <View> { width: Fill, height: 1, show_bg: true, draw_bg: { color: (BORDER) } }
+
+                    // ---- below the toolbar: side panel | diff (resizable) ---
                     outer_split = <Splitter> {
                         axis: Horizontal,
                         align: FromA(320.0),
@@ -139,7 +176,7 @@ live_design! {
                             // vertical split: commits (top) / files (bottom)
                             side_split = <Splitter> {
                                 axis: Vertical,
-                                align: FromA(380.0),
+                                align: FromA(360.0),
                                 a = <View> {
                                     width: Fill, height: Fill, flow: Down,
                                     commits_hdr = <SectionHeader> { lbl = { text: "COMMITS" } }
@@ -153,7 +190,7 @@ live_design! {
                                     files_hdr = <SectionHeader> { lbl = { text: "FILES" } }
                                     file_list = <PortalList> {
                                         width: Fill, height: Fill,
-                                        FileRow = <FileRow> {}
+                                        TreeRow = <TreeRow> {}
                                     }
                                 }
                             }
@@ -161,26 +198,6 @@ live_design! {
                         b = <View> {
                             width: Fill, height: Fill, flow: Down,
                             show_bg: true, draw_bg: { color: (BG) }
-                            // toolbar
-                            toolbar = <View> {
-                                width: Fill, height: Fit, flow: Right, align: { y: 0.5 }
-                                padding: { left: 10, right: 8, top: 6, bottom: 6 }
-                                spacing: 6,
-                                show_bg: true, draw_bg: { color: (BG) }
-                                summary = <Label> {
-                                    draw_text: { color: (TEXTCOL), text_style: <THEME_FONT_BOLD> { font_size: 12.0 } }
-                                    text: ""
-                                }
-                                t_add = <Label> { draw_text: { color: (ADD_FG_DSL), text_style: { font_size: 12.0 } } text: "" }
-                                t_del = <Label> { draw_text: { color: (DEL_FG_DSL), text_style: { font_size: 12.0 } } text: "" }
-                                tfiller = <View> { width: Fill, height: 1 }
-                                btn_wrap = <ToolBtn> { text: "⤶" }
-                                btn_space = <ToolBtn> { text: "␣" }
-                                btn_fdec = <ToolBtn> { text: "A-" }
-                                btn_finc = <ToolBtn> { text: "A+" }
-                                btn_lines = <ToolBtn> { text: "#" }
-                            }
-                            tsep = <View> { width: Fill, height: 1, show_bg: true, draw_bg: { color: (BORDER) } }
                             diff_list = <PortalList> {
                                 width: Fill, height: Fill,
                                 DiffRow = <DiffRow> {}
@@ -197,6 +214,190 @@ app_main!(App);
 
 fn main() {
     app_main();
+}
+
+// ---------------------------------------------------------------------------
+// Palette — GitHub light / dark, chosen from the system theme at startup.
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy)]
+struct Palette {
+    bg: Vec4,
+    panel: Vec4,
+    border: Vec4,
+    text: Vec4,
+    muted: Vec4,
+    accent: Vec4,
+    sel: Vec4,
+    add_bg: Vec4,
+    add_mark: Vec4,
+    add_fg: Vec4,
+    del_bg: Vec4,
+    del_mark: Vec4,
+    del_fg: Vec4,
+}
+
+impl Palette {
+    fn light() -> Self {
+        Self {
+            bg: hex(0xffffff),
+            panel: hex(0xf6f8fa),
+            border: hex(0xd0d7de),
+            text: hex(0x1f2328),
+            muted: hex(0x656d76),
+            accent: hex(0x0969da),
+            sel: hex(0xddf4ff),
+            add_bg: hex(0xe6ffec),
+            add_mark: hex(0xabf2bc),
+            add_fg: hex(0x1a7f37),
+            del_bg: hex(0xffebe9),
+            del_mark: hex(0xff8182),
+            del_fg: hex(0xcf222e),
+        }
+    }
+
+    fn dark() -> Self {
+        Self {
+            bg: hex(0x0d1117),
+            panel: hex(0x161b22),
+            border: hex(0x30363d),
+            text: hex(0xe6edf3),
+            muted: hex(0x8b949e),
+            accent: hex(0x2f81f7),
+            sel: hex(0x1f6feb),
+            add_bg: hex(0x12261e),
+            add_mark: hex(0x2ea043),
+            add_fg: hex(0x3fb950),
+            del_bg: hex(0x25171c),
+            del_mark: hex(0xf85149),
+            del_fg: hex(0xf85149),
+        }
+    }
+
+    /// Hunk-header band background: a subtle accent tint.
+    fn hunk(&self) -> Vec4 {
+        // 12% accent over panel.
+        mix(self.panel, self.accent, 0.12)
+    }
+}
+
+/// Detect the desired scheme. Honours `GIT_REVIEW_THEME` (`light`/`dark`),
+/// otherwise the system via `dark-light`; headless/unspecified → light.
+fn detect_dark() -> bool {
+    if let Ok(v) = std::env::var("GIT_REVIEW_THEME") {
+        match v.trim().to_ascii_lowercase().as_str() {
+            "dark" => return true,
+            "light" => return false,
+            _ => {}
+        }
+    }
+    matches!(dark_light::detect(), Ok(dark_light::Mode::Dark))
+}
+
+fn hex(c: u32) -> Vec4 {
+    vec4(
+        ((c >> 16) & 0xff) as f32 / 255.0,
+        ((c >> 8) & 0xff) as f32 / 255.0,
+        (c & 0xff) as f32 / 255.0,
+        1.0,
+    )
+}
+
+fn mix(a: Vec4, b: Vec4, t: f32) -> Vec4 {
+    vec4(
+        a.x + (b.x - a.x) * t,
+        a.y + (b.y - a.y) * t,
+        a.z + (b.z - a.z) * t,
+        a.w + (b.w - a.w) * t,
+    )
+}
+
+const TRANSPARENT: Vec4 = Vec4 { x: 0.0, y: 0.0, z: 0.0, w: 0.0 };
+
+// ---------------------------------------------------------------------------
+// File tree: build a real hierarchy from the diff's file paths, collapse
+// single-child directory chains GitHub-style, and flatten the *visible* nodes.
+// ---------------------------------------------------------------------------
+
+struct TreeDir {
+    /// Display name (may be a collapsed chain like `a/b/c`).
+    name: String,
+    /// Stable key (full path prefix) used to remember expand state across rebuilds.
+    key: String,
+    children_dirs: Vec<TreeDir>,
+    children_files: Vec<TreeLeaf>,
+}
+
+struct TreeLeaf {
+    name: String,
+    file_index: usize,
+    added: u32,
+    removed: u32,
+}
+
+impl TreeDir {
+    fn new(name: String, key: String) -> Self {
+        Self { name, key, children_dirs: Vec::new(), children_files: Vec::new() }
+    }
+
+    /// Insert a file path's directory components, then the leaf.
+    fn insert(&mut self, comps: &[&str], leaf: TreeLeaf) {
+        if comps.is_empty() {
+            self.children_files.push(leaf);
+            return;
+        }
+        let head = comps[0];
+        let child_key = if self.key.is_empty() {
+            head.to_string()
+        } else {
+            format!("{}/{}", self.key, head)
+        };
+        let idx = match self.children_dirs.iter().position(|d| d.name == head) {
+            Some(i) => i,
+            None => {
+                self.children_dirs.push(TreeDir::new(head.to_string(), child_key));
+                self.children_dirs.len() - 1
+            }
+        };
+        self.children_dirs[idx].insert(&comps[1..], leaf);
+    }
+
+    /// Collapse `a/ -> b/ -> c.rs` chains: a directory whose only content is a
+    /// single subdirectory (no files) merges into that subdirectory GitHub-style.
+    fn collapse(&mut self) {
+        for d in &mut self.children_dirs {
+            d.collapse();
+        }
+        // Merge while we have exactly one child dir and no files of our own.
+        while self.children_files.is_empty() && self.children_dirs.len() == 1 {
+            let only = self.children_dirs.remove(0);
+            self.name = format!("{}/{}", self.name, only.name);
+            self.key = only.key; // keep the deepest key
+            self.children_dirs = only.children_dirs;
+            self.children_files = only.children_files;
+        }
+    }
+
+    fn sort(&mut self) {
+        self.children_dirs.sort_by(|a, b| a.name.cmp(&b.name));
+        self.children_files.sort_by(|a, b| a.name.cmp(&b.name));
+        for d in &mut self.children_dirs {
+            d.sort();
+        }
+    }
+}
+
+#[derive(Clone)]
+enum TreeRowKind {
+    Folder { key: String, expanded: bool },
+    File { file_index: usize, added: u32, removed: u32 },
+}
+
+#[derive(Clone)]
+struct TreeNode {
+    depth: usize,
+    name: String,
+    kind: TreeRowKind,
 }
 
 // ---------------------------------------------------------------------------
@@ -250,6 +451,7 @@ struct DiffRow {
     #[rust] row: Option<Row>,
     #[rust(11.0f64)] font_size: f64,
     #[rust(true)] line_numbers: bool,
+    #[rust(Palette::light())] pal: Palette,
 }
 
 impl LiveHook for DiffRow {}
@@ -261,6 +463,7 @@ impl Widget for DiffRow {
         let Some(row) = self.row.clone() else {
             return DrawStep::done();
         };
+        let pal = self.pal;
 
         let fs = self.font_size;
         let char_w = fs * 0.62;
@@ -274,14 +477,14 @@ impl Widget for DiffRow {
                 let height = line_h * 2.2 + 16.0;
                 let walk = Walk { width: Size::Fill, height: Size::Fixed(height), ..walk };
                 let rect = cx.walk_turtle(walk);
-                self.draw_bg.color = color_panel();
+                self.draw_bg.color = pal.panel;
                 self.draw_bg.draw_abs(cx, rect);
-                self.draw_text.color = color_text();
+                self.draw_text.color = pal.text;
                 self.draw_text.draw_abs(cx, dvec2(rect.pos.x + 12.0, rect.pos.y + 8.0), &row.title);
-                self.draw_text.color = color_muted();
+                self.draw_text.color = pal.muted;
                 self.draw_text.draw_abs(cx, dvec2(rect.pos.x + 12.0, rect.pos.y + 8.0 + line_h), &row.subtitle);
                 if !row.spans.is_empty() {
-                    self.draw_text.color = color_text();
+                    self.draw_text.color = pal.text;
                     self.draw_text.draw_abs(cx, dvec2(rect.pos.x + 12.0, rect.pos.y + 8.0 + line_h * 2.2), &row.spans[0].text);
                 }
                 cx.add_aligned_rect_area(&mut self.area, rect);
@@ -290,15 +493,15 @@ impl Widget for DiffRow {
                 let height = line_h + 12.0;
                 let walk = Walk { width: Size::Fill, height: Size::Fixed(height), ..walk };
                 let rect = cx.walk_turtle(walk);
-                self.draw_bg.color = color_panel();
+                self.draw_bg.color = pal.panel;
                 self.draw_bg.draw_abs(cx, rect);
-                self.draw_mark.color = color_border();
+                self.draw_mark.color = pal.border;
                 self.draw_mark.draw_abs(cx, Rect { pos: rect.pos, size: dvec2(rect.size.x, 1.0) });
-                self.draw_text.color = color_text();
+                self.draw_text.color = pal.text;
                 self.draw_text.draw_abs(cx, dvec2(rect.pos.x + 10.0, rect.pos.y + 6.0), &row.title);
                 let counts = &row.subtitle;
                 let cw = counts.chars().count() as f64 * char_w;
-                self.draw_text.color = color_muted();
+                self.draw_text.color = pal.muted;
                 self.draw_text.draw_abs(cx, dvec2(rect.pos.x + rect.size.x - cw - 12.0, rect.pos.y + 6.0), counts);
                 cx.add_aligned_rect_area(&mut self.area, rect);
             }
@@ -306,7 +509,7 @@ impl Widget for DiffRow {
                 let height = line_h + 6.0;
                 let walk = Walk { width: Size::Fill, height: Size::Fixed(height), ..walk };
                 let rect = cx.walk_turtle(walk);
-                self.draw_text.color = color_muted();
+                self.draw_text.color = pal.muted;
                 self.draw_text.draw_abs(cx, dvec2(rect.pos.x + 14.0, rect.pos.y + 3.0), "Binary file not shown");
                 cx.add_aligned_rect_area(&mut self.area, rect);
             }
@@ -322,9 +525,9 @@ impl Widget for DiffRow {
                 let rect = cx.walk_turtle(walk);
 
                 if matches!(row.kind, RowKind::HunkHeader) {
-                    self.draw_bg.color = color_hunk();
+                    self.draw_bg.color = pal.hunk();
                     self.draw_bg.draw_abs(cx, rect);
-                    self.draw_text.color = color_muted();
+                    self.draw_text.color = pal.muted;
                     self.draw_text.draw_abs(cx, dvec2(rect.pos.x + 8.0, rect.pos.y + 2.0), &row.title);
                     cx.add_aligned_rect_area(&mut self.area, rect);
                     return DrawStep::done();
@@ -343,7 +546,7 @@ impl Widget for DiffRow {
 
                 let top = rect.pos.y + 2.0;
                 if self.line_numbers {
-                    self.draw_text.color = color_muted();
+                    self.draw_text.color = pal.muted;
                     if let Some(n) = row.old_no {
                         let s = n.to_string();
                         let x = rect.pos.x + num_w - 4.0 - s.chars().count() as f64 * char_w;
@@ -356,7 +559,7 @@ impl Widget for DiffRow {
                     }
                 }
                 if row.sign != ' ' {
-                    self.draw_text.color = if row.line_kind == LineKind::Added { color_add_fg() } else { color_del_fg() };
+                    self.draw_text.color = if row.line_kind == LineKind::Added { pal.add_fg } else { pal.del_fg };
                     self.draw_text.draw_abs(cx, dvec2(rect.pos.x + gutter - sign_w + 4.0, top), &row.sign.to_string());
                 }
 
@@ -375,10 +578,11 @@ impl Widget for DiffRow {
 }
 
 impl DiffRow {
-    fn set_row(&mut self, row: Row, font_size: f64, line_numbers: bool) {
+    fn set_row(&mut self, row: Row, font_size: f64, line_numbers: bool, pal: Palette) {
         self.row = Some(row);
         self.font_size = font_size;
         self.line_numbers = line_numbers;
+        self.pal = pal;
     }
 }
 
@@ -422,10 +626,15 @@ struct Model {
     commits: Vec<CommitInfo>,
     diff: DiffSet,
     rows: Vec<Row>,
+    /// Flattened *visible* file-tree rows for the file PortalList.
+    tree_rows: Vec<TreeNode>,
+    /// Folder expand state, keyed by full path prefix. Default = expanded.
+    collapsed: std::collections::HashSet<String>,
     showing: Showing,
     from: Option<Oid>,
     to: Option<Oid>,
     settings: Settings,
+    pal: Palette,
     #[allow(dead_code)]
     error: Option<String>,
 }
@@ -437,9 +646,12 @@ impl LiveHook for App {
             .or_else(|| std::env::var("GIT_REVIEW_REPO").ok())
             .unwrap_or_else(|| ".".to_string());
 
+        let dark = detect_dark();
+        let pal = if dark { Palette::dark() } else { Palette::light() };
+
         match Repo::open(&path) {
             Ok(repo) => {
-                let hl = Highlighter::new();
+                let hl = Highlighter::with_theme(dark);
                 let repo_name = repo.workdir_name();
                 let commits = repo.commits(500).unwrap_or_default();
                 let showing = commits
@@ -453,10 +665,13 @@ impl LiveHook for App {
                     commits,
                     diff: empty_diff(),
                     rows: Vec::new(),
+                    tree_rows: Vec::new(),
+                    collapsed: std::collections::HashSet::new(),
                     showing,
                     from: None,
                     to: None,
                     settings: Settings::default(),
+                    pal,
                     error: None,
                 };
                 model.recompute();
@@ -488,6 +703,7 @@ impl AppMain for App {
 
 impl MatchEvent for App {
     fn handle_startup(&mut self, cx: &mut Cx) {
+        self.apply_palette(cx);
         self.refresh_chrome(cx);
         self.ui.redraw(cx);
     }
@@ -495,6 +711,7 @@ impl MatchEvent for App {
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions) {
         let mut dirty_recompute = false;
         let mut dirty_chrome = false;
+        let mut dirty_tree = false;
 
         // --- toolbar buttons ---
         if self.ui.button(id!(btn_wrap)).clicked(actions) {
@@ -545,18 +762,36 @@ impl MatchEvent for App {
         }
 
         // --- file tree interactions ---
+        // Folder rows toggle expand; file leaves scroll the diff.
         let file_list = self.ui.portal_list(id!(file_list));
-        let files_len = self.model.as_ref().map(|m| m.diff.files.len()).unwrap_or(0);
-        for i in 0..files_len {
+        let tree_len = self.model.as_ref().map(|m| m.tree_rows.len()).unwrap_or(0);
+        for i in 0..tree_len {
             if let Some((_, item)) = file_list.get_item(i) {
                 if item.as_view().finger_down(actions).is_some() {
-                    self.scroll_to_file(cx, i);
+                    let action = self.model.as_ref().and_then(|m| m.tree_rows.get(i)).map(|n| n.kind.clone());
+                    match action {
+                        Some(TreeRowKind::Folder { key, .. }) => {
+                            if let Some(m) = &mut self.model {
+                                if !m.collapsed.remove(&key) {
+                                    m.collapsed.insert(key);
+                                }
+                            }
+                            dirty_tree = true;
+                        }
+                        Some(TreeRowKind::File { file_index, .. }) => {
+                            self.scroll_to_file(cx, file_index);
+                        }
+                        None => {}
+                    }
                 }
             }
         }
 
         if dirty_recompute {
             if let Some(m) = &mut self.model { m.recompute(); }
+            dirty_chrome = true;
+        } else if dirty_tree {
+            if let Some(m) = &mut self.model { m.rebuild_tree(); }
             dirty_chrome = true;
         }
         if dirty_chrome {
@@ -624,6 +859,33 @@ impl App {
         }
     }
 
+    /// Push the chosen GitHub palette into every live widget. Makepad bakes DSL
+    /// colours at live-design time, so we override them in Rust at startup.
+    fn apply_palette(&mut self, cx: &mut Cx) {
+        let Some(m) = &self.model else { return };
+        let p = m.pal;
+        // Backgrounds.
+        self.ui.view(id!(body)).apply_over(cx, live! { draw_bg: { color: (p.bg) } });
+        self.ui.view(id!(toolbar)).apply_over(cx, live! { draw_bg: { color: (p.panel) } });
+        self.ui.view(id!(tsep)).apply_over(cx, live! { draw_bg: { color: (p.border) } });
+        // Splitter content backgrounds (side = panel, main = bg).
+        self.ui.view(id!(outer_split.a)).apply_over(cx, live! { draw_bg: { color: (p.panel) } });
+        self.ui.view(id!(outer_split.b)).apply_over(cx, live! { draw_bg: { color: (p.bg) } });
+        // Section headers.
+        self.ui.view(id!(commits_hdr)).apply_over(cx, live! { draw_bg: { color: (p.panel) } });
+        self.ui.view(id!(files_hdr)).apply_over(cx, live! { draw_bg: { color: (p.panel) } });
+        self.ui.label(id!(commits_hdr.lbl)).apply_over(cx, live! { draw_text: { color: (p.muted) } });
+        self.ui.label(id!(files_hdr.lbl)).apply_over(cx, live! { draw_text: { color: (p.muted) } });
+        // Toolbar labels + summary.
+        self.ui.label(id!(summary)).apply_over(cx, live! { draw_text: { color: (p.text) } });
+        self.ui.label(id!(t_add)).apply_over(cx, live! { draw_text: { color: (p.add_fg) } });
+        self.ui.label(id!(t_del)).apply_over(cx, live! { draw_text: { color: (p.del_fg) } });
+        // Toolbar buttons.
+        for b in [id!(btn_wrap), id!(btn_space), id!(btn_fdec), id!(btn_finc), id!(btn_lines)] {
+            apply_btn_palette(cx, &self.ui.button(b), &p);
+        }
+    }
+
     fn refresh_chrome(&mut self, cx: &mut Cx) {
         let (summary, added, removed, repo_name, files_len, wrap, space, lines) = {
             let Some(m) = &self.model else { return };
@@ -651,6 +913,7 @@ impl App {
 
     fn draw_commit_list(&mut self, cx: &mut Cx2d, list: &mut PortalList) {
         let Some(m) = &self.model else { return };
+        let p = m.pal;
         list.set_item_range(cx, 0, m.commits.len());
         while let Some(i) = list.next_visible_item(cx) {
             if i >= m.commits.len() { continue; }
@@ -670,8 +933,17 @@ impl App {
             item.label(id!(author)).set_text(cx, &c.author);
             item.label(id!(title)).set_text(cx, &c.title);
 
-            let bg = if is_current { color_sel() } else { color_panel() };
+            // palette: text colours per label + separator
+            item.label(id!(sha)).apply_over(cx, live! { draw_text: { color: (p.accent) } });
+            item.label(id!(date)).apply_over(cx, live! { draw_text: { color: (p.muted) } });
+            item.label(id!(author)).apply_over(cx, live! { draw_text: { color: (p.muted) } });
+            item.label(id!(title)).apply_over(cx, live! { draw_text: { color: (p.text) } });
+            item.view(id!(sep)).apply_over(cx, live! { draw_bg: { color: (p.border) } });
+
+            let bg = if is_current { p.sel } else { p.panel };
             item.apply_over(cx, live! { draw_bg: { color: (bg) } });
+            apply_btn_palette(cx, &item.button(id!(from_btn)), &p);
+            apply_btn_palette(cx, &item.button(id!(to_btn)), &p);
             set_active(cx, &item.button(id!(from_btn)), is_from);
             set_active(cx, &item.button(id!(to_btn)), is_to);
 
@@ -684,29 +956,54 @@ impl App {
 
     fn draw_file_list(&mut self, cx: &mut Cx2d, list: &mut PortalList) {
         let Some(m) = &self.model else { return };
-        list.set_item_range(cx, 0, m.diff.files.len());
+        let p = m.pal;
+        list.set_item_range(cx, 0, m.tree_rows.len());
         while let Some(i) = list.next_visible_item(cx) {
-            if i >= m.diff.files.len() { continue; }
-            let f = &m.diff.files[i];
-            let item = list.item(cx, i, live_id!(FileRow));
-            item.label(id!(icon)).set_text(cx, file_icon(&f.path));
-            item.label(id!(name)).set_text(cx, &f.path);
-            item.label(id!(fadd)).set_text(cx, &format!("+{}", f.added));
-            item.label(id!(fdel)).set_text(cx, &format!("−{}", f.removed));
+            if i >= m.tree_rows.len() { continue; }
+            let node = &m.tree_rows[i];
+            let item = list.item(cx, i, live_id!(TreeRow));
+
+            // indent by depth
+            let indent_w = (node.depth as f64) * 14.0;
+            item.view(id!(indent)).apply_over(cx, live! { width: (indent_w) });
+
+            item.apply_over(cx, live! { draw_bg: { color: (p.panel) } });
+            item.label(id!(arrow)).apply_over(cx, live! { draw_text: { color: (p.muted) } });
+            item.label(id!(name)).apply_over(cx, live! { draw_text: { color: (p.text) } });
+            item.label(id!(fadd)).apply_over(cx, live! { draw_text: { color: (p.add_fg) } });
+            item.label(id!(fdel)).apply_over(cx, live! { draw_text: { color: (p.del_fg) } });
+
+            match &node.kind {
+                TreeRowKind::Folder { expanded, .. } => {
+                    item.label(id!(arrow)).set_text(cx, if *expanded { "▾" } else { "▸" });
+                    item.label(id!(icon)).set_text(cx, "📁");
+                    item.label(id!(name)).set_text(cx, &node.name);
+                    item.label(id!(fadd)).set_text(cx, "");
+                    item.label(id!(fdel)).set_text(cx, "");
+                }
+                TreeRowKind::File { file_index, added, removed } => {
+                    let path = m.diff.files.get(*file_index).map(|f| f.path.as_str()).unwrap_or("");
+                    item.label(id!(arrow)).set_text(cx, "");
+                    item.label(id!(icon)).set_text(cx, file_icon(path));
+                    item.label(id!(name)).set_text(cx, &node.name);
+                    item.label(id!(fadd)).set_text(cx, &format!("+{}", added));
+                    item.label(id!(fdel)).set_text(cx, &format!("−{}", removed));
+                }
+            }
             item.draw_all(cx, &mut Scope::empty());
         }
     }
 
     fn draw_diff_list(&mut self, cx: &mut Cx2d, list: &mut PortalList) {
         let Some(m) = &self.model else { return };
-        let (fs, ln) = (m.settings.font_size, m.settings.line_numbers);
+        let (fs, ln, pal) = (m.settings.font_size, m.settings.line_numbers, m.pal);
         list.set_item_range(cx, 0, m.rows.len());
         while let Some(i) = list.next_visible_item(cx) {
             if i >= m.rows.len() { continue; }
             let row = m.rows[i].clone();
             let item = list.item(cx, i, live_id!(DiffRow));
             if let Some(mut dr) = item.borrow_mut::<DiffRow>() {
-                dr.set_row(row, fs, ln);
+                dr.set_row(row, fs, ln, pal);
             }
             item.draw_all(cx, &mut Scope::empty());
         }
@@ -729,21 +1026,70 @@ impl Model {
             Err(e) => self.error = Some(e.message().to_string()),
         }
         self.rebuild_rows();
+        self.rebuild_tree();
+    }
+
+    /// Build the hierarchical file tree from the current diff and flatten the
+    /// visible nodes (honouring per-folder collapse state) into `tree_rows`.
+    fn rebuild_tree(&mut self) {
+        let mut root = TreeDir::new(String::new(), String::new());
+        for (fi, f) in self.diff.files.iter().enumerate() {
+            let comps: Vec<&str> = f.path.split('/').filter(|s| !s.is_empty()).collect();
+            let (dirs, name) = comps.split_at(comps.len().saturating_sub(1));
+            let leaf = TreeLeaf {
+                name: name.first().copied().unwrap_or(&f.path).to_string(),
+                file_index: fi,
+                added: f.added,
+                removed: f.removed,
+            };
+            root.insert(dirs, leaf);
+        }
+        // Collapse single-child dir chains, then sort folders-then-files.
+        for d in &mut root.children_dirs {
+            d.collapse();
+        }
+        root.sort();
+
+        let mut out = Vec::new();
+        let collapsed = &self.collapsed;
+        fn walk(dir: &TreeDir, depth: usize, collapsed: &std::collections::HashSet<String>, out: &mut Vec<TreeNode>) {
+            for d in &dir.children_dirs {
+                let expanded = !collapsed.contains(&d.key);
+                out.push(TreeNode {
+                    depth,
+                    name: d.name.clone(),
+                    kind: TreeRowKind::Folder { key: d.key.clone(), expanded },
+                });
+                if expanded {
+                    walk(d, depth + 1, collapsed, out);
+                }
+            }
+            for f in &dir.children_files {
+                out.push(TreeNode {
+                    depth,
+                    name: f.name.clone(),
+                    kind: TreeRowKind::File { file_index: f.file_index, added: f.added, removed: f.removed },
+                });
+            }
+        }
+        walk(&root, 0, collapsed, &mut out);
+        self.tree_rows = out;
     }
 
     fn rebuild_rows(&mut self) {
         let mut rows = Vec::new();
+        let pal = self.pal;
 
         if let Some(msg) = &self.diff.message {
             let mut spans = Vec::new();
             if !msg.body.is_empty() {
-                spans.push(Span { color: color_text(), text: msg.body.replace('\n', "  ") });
+                spans.push(Span { color: pal.text, text: msg.body.replace('\n', "  ") });
             }
             rows.push(Row {
                 kind: RowKind::CommitMsg,
                 file_index: None,
-                bg: color_panel(),
-                mark: vec4(0.0, 0.0, 0.0, 0.0),
+                bg: pal.panel,
+                mark: TRANSPARENT,
                 line_kind: LineKind::Context,
                 old_no: None,
                 new_no: None,
@@ -763,8 +1109,8 @@ impl Model {
             rows.push(Row {
                 kind: RowKind::FileHeader,
                 file_index: Some(fi),
-                bg: color_panel(),
-                mark: vec4(0.0, 0.0, 0.0, 0.0),
+                bg: pal.panel,
+                mark: TRANSPARENT,
                 line_kind: LineKind::Context,
                 old_no: None,
                 new_no: None,
@@ -784,8 +1130,8 @@ impl Model {
                 rows.push(Row {
                     kind: RowKind::HunkHeader,
                     file_index: Some(fi),
-                    bg: color_hunk(),
-                    mark: vec4(0.0, 0.0, 0.0, 0.0),
+                    bg: pal.hunk(),
+                    mark: TRANSPARENT,
                     line_kind: LineKind::Context,
                     old_no: None,
                     new_no: None,
@@ -796,9 +1142,9 @@ impl Model {
                 });
                 for line in &hunk.lines {
                     let (bg, mark, sign) = match line.kind {
-                        LineKind::Added => (color_add_bg(), color_add_mark(), '+'),
-                        LineKind::Removed => (color_del_bg(), color_del_mark(), '-'),
-                        LineKind::Context => (vec4(0.0, 0.0, 0.0, 0.0), vec4(0.0, 0.0, 0.0, 0.0), ' '),
+                        LineKind::Added => (pal.add_bg, pal.add_mark, '+'),
+                        LineKind::Removed => (pal.del_bg, pal.del_mark, '-'),
+                        LineKind::Context => (TRANSPARENT, TRANSPARENT, ' '),
                     };
                     let hspans = self.hl.line(&syntax, &line.text);
                     let spans = hspans
@@ -830,8 +1176,8 @@ fn blank_row(kind: RowKind, file_index: Option<usize>) -> Row {
     Row {
         kind,
         file_index,
-        bg: vec4(0.0, 0.0, 0.0, 0.0),
-        mark: vec4(0.0, 0.0, 0.0, 0.0),
+        bg: TRANSPARENT,
+        mark: TRANSPARENT,
         line_kind: LineKind::Context,
         old_no: None,
         new_no: None,
@@ -847,22 +1193,19 @@ fn set_active(cx: &mut Cx, btn: &ButtonRef, active: bool) {
     btn.apply_over(cx, live! { draw_bg: { active: (v) }, draw_text: { active: (v) } });
 }
 
-// ---- color helpers (match the DSL palette) --------------------------------
+/// Feed the palette into a ToolBtn's shader instance colours.
+fn apply_btn_palette(cx: &mut Cx, btn: &ButtonRef, p: &Palette) {
+    let (bg, sel, border, accent, text) = (p.bg, p.sel, p.border, p.accent, p.text);
+    btn.apply_over(cx, live! {
+        draw_bg: { c_bg: (bg), c_sel: (sel), c_border: (border), c_accent: (accent) },
+        draw_text: { c_text: (text), c_accent: (accent) }
+    });
+}
+
+// ---- color helpers --------------------------------------------------------
 fn rgb_to_vec4(c: (u8, u8, u8)) -> Vec4 {
     vec4(c.0 as f32 / 255.0, c.1 as f32 / 255.0, c.2 as f32 / 255.0, 1.0)
 }
-fn color_text() -> Vec4 { rgb_to_vec4((0x1f, 0x23, 0x28)) }
-fn color_muted() -> Vec4 { rgb_to_vec4((0x65, 0x6d, 0x76)) }
-fn color_border() -> Vec4 { rgb_to_vec4((0xd0, 0xd7, 0xde)) }
-fn color_panel() -> Vec4 { rgb_to_vec4((0xf6, 0xf8, 0xfa)) }
-fn color_sel() -> Vec4 { rgb_to_vec4((0xdd, 0xf4, 0xff)) }
-fn color_hunk() -> Vec4 { rgb_to_vec4((0xdd, 0xf4, 0xff)) }
-fn color_add_bg() -> Vec4 { rgb_to_vec4((0xe6, 0xff, 0xec)) }
-fn color_add_mark() -> Vec4 { rgb_to_vec4((0xab, 0xf2, 0xbc)) }
-fn color_del_bg() -> Vec4 { rgb_to_vec4((0xff, 0xeb, 0xe9)) }
-fn color_del_mark() -> Vec4 { rgb_to_vec4((0xff, 0x81, 0x82)) }
-fn color_add_fg() -> Vec4 { rgb_to_vec4((0x1a, 0x7f, 0x37)) }
-fn color_del_fg() -> Vec4 { rgb_to_vec4((0xcf, 0x22, 0x2e)) }
 
 fn file_icon(path: &str) -> &'static str {
     let ext = std::path::Path::new(path)

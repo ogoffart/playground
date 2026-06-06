@@ -18,8 +18,8 @@ Makepad needs an OpenGL context. On a headless box you can run it under Xvfb wit
 software GL:
 
 ```sh
-Xvfb :92 -screen 0 1280x860x24 -ac +extension GLX +render &
-DISPLAY=:92 LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe \
+Xvfb :94 -screen 0 1280x800x24 -ac +extension GLX +render &
+DISPLAY=:94 LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe \
     cargo run -- /tmp/git-review-sample
 ```
 
@@ -52,12 +52,38 @@ repo, so the data model (`CommitInfo`, `DiffSet`, `FileDiff`, `Hunk`, `DiffLine`
   `View`, `Button`, `Label`, `Splitter`, `PortalList`). Rust only feeds data in
   and reads actions out.
 
-* **Resizable splitters — real, not approximated.** Makepad ships a `Splitter`
-  widget that owns its own drag handling and exposes `a`/`b` content slots. Two
-  nested `Splitter`s give exactly the SPEC layout: an outer `Horizontal` splitter
-  (side panel ↔ main view) and an inner `Vertical` splitter (commit list ↔ file
-  tree). The horizontal divider between the side panel and the diff is fully
-  draggable.
+* **Full-width toolbar pinned at the top.** The root `body` is a *vertical* `View`:
+  a single full-width `toolbar` bar (distinct panel background + a 1px bottom
+  border) spanning the entire window above everything, then the resizable content.
+  The toolbar sits *outside* the splitters, so it is never affected by panel
+  resizing.
+
+* **Resizable splitters — real, not approximated.** Below the toolbar, Makepad's
+  `Splitter` widget (it owns its own drag handling and exposes `a`/`b` content
+  slots) gives the SPEC layout: an outer `Horizontal` splitter (side panel ↔ main
+  view) with an inner `Vertical` splitter (commit list ↔ file tree). The divider
+  between the side panel and the diff is fully draggable.
+
+* **Real hierarchical file tree.** The diff's flat file paths are folded into an
+  actual directory tree (`TreeDir`/`TreeLeaf`): each path component becomes a
+  collapsible folder node, single-child directory chains are collapsed GitHub-style
+  into one node (`a/b/c.rs`), and distinct subtrees branch. The tree is expanded by
+  default; per-folder collapse state is remembered across rebuilds in a `HashSet`
+  of path keys. The visible nodes are flattened into a `Vec<TreeNode>` (depth +
+  kind) and rendered by a `TreeRow` PortalList item that shows a disclosure
+  triangle, a folder/file-type icon, the node name (indented by depth), and `+a −r`
+  counts on leaves. Clicking a folder toggles it; clicking a file leaf
+  `smooth_scroll_to`s the diff to that file's header.
+
+* **System light/dark theme.** At startup the desktop scheme is detected with the
+  `dark-light` crate (overridable via `GIT_REVIEW_THEME=light|dark`; headless /
+  unspecified → light) and the matching GitHub `Palette` (light or dark, exact
+  hexes from the SPEC) is chosen. Because Makepad bakes `live_design!` colours at
+  live-design time, the palette is instead held in Rust and pushed into every
+  widget at startup via `apply_over` (backgrounds, label colours, and the ToolBtn
+  shader's `instance` colour uniforms) and fed into the custom `DiffRow`. The
+  syntect highlighting theme tracks the scheme too (`InspiredGitHub` for light,
+  `base16-ocean.dark` for dark).
 
 * **Virtualized lists via `PortalList`.** All three scrollable areas (commits,
   file tree, diff body) are `PortalList`s. They recycle a small pool of item
@@ -114,15 +140,20 @@ repo, so the data model (`CommitInfo`, `DiffSet`, `FileDiff`, `Hunk`, `DiffLine`
 
 ## Headless render
 
-The app **builds and runs**, and was smoke-tested under `Xvfb :92` (1280x860) with software GL
-(`LIBGL_ALWAYS_SOFTWARE=1`, Mesa llvmpipe). Makepad creates its OpenGL context and lays out the
-window: `screenshot.png` shows the chrome rendering correctly — the top toolbar strip, the
-horizontally **resizable** side panel with its vertical commits/files split, the draggable
-divider, and the main diff pane.
+The app **builds and runs**, and was smoke-tested under `Xvfb :94` (1280x800, matching the
+window's default `inner_size`) with software GL (`LIBGL_ALWAYS_SOFTWARE=1`, Mesa llvmpipe).
+Makepad creates its OpenGL context and lays out the window: `screenshot.png` shows the chrome
+rendering — the full-width top toolbar strip with its bottom border, the horizontally
+**resizable** side panel with its vertical commits/files split, the draggable divider, and the
+main diff pane.
 
-**Limitation in this headless container:** Makepad renders text through a GPU SDF font atlas, and
-under Mesa **llvmpipe** (pure software GL, no real GPU) that text pass does not paint — so the
-panels render but glyphs are blank in the captured frame. This is an environment limitation of
-software GL, not an app bug; on a machine with a real GPU the same binary renders the full UI
-(commit rows, file tree, and the syntax-highlighted diff drawn by the custom `DiffRow` widget).
-The `target class not found` lines in the run log are benign `live_design!` apply warnings.
+**Limitation in this headless container:** Makepad renders text through a GPU SDF font atlas. Under
+Mesa **llvmpipe** (pure software GL, no real GPU) that pass is unreliable: in the captured frame
+the full-width toolbar paints completely — the `git show <sha>` summary, the green/red `+/−`
+aggregate counts, and the inset toggle buttons (with the active line-numbers button drawn pressed)
+— but the virtualized `PortalList` content inside the panels (commit rows, the hierarchical file
+tree, and the syntax-highlighted diff) does not paint its glyphs, so those regions read as blank
+panels with the toolbar bar, its bottom border, and the draggable splitter divider clearly
+visible. This is an environment limitation of software GL, not an app bug; on a machine with a real
+GPU the same binary renders the full UI in the system-matched light/dark palette. The `target
+class not found` lines in the run log are benign `live_design!` apply warnings.
