@@ -27,3 +27,10 @@ jiff = "0.2"
 
 [profile.dev]
 opt-level = 1
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

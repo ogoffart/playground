@@ -8,40 +8,45 @@
   </head>
   <body>
     <div id="app">
-      <!-- Left side panel: commits (top) + files (bottom), resizable splits -->
-      <aside id="side">
-        <section id="commits-pane">
-          <div class="pane-head" id="commits-head">COMMITS</div>
-          <div class="pane-body" id="commit-list"></div>
-        </section>
-        <div class="vsplit" id="side-vsplit" title="Drag to resize"></div>
-        <section id="files-pane">
-          <div class="pane-head" id="files-head">FILES</div>
-          <div class="pane-body" id="file-tree"></div>
-        </section>
-      </aside>
-
-      <!-- Horizontal divider between side panel and main view -->
-      <div class="hsplit" id="side-hsplit" title="Drag to resize"></div>
-
-      <!-- Main view: toolbar (pinned) + scrollable diff -->
-      <main id="main">
-        <div id="toolbar">
-          <div id="summary">
-            <span id="summary-text" class="mono"></span>
-            <span id="added" class="add"></span>
-            <span id="removed" class="del"></span>
-          </div>
-          <div id="tools">
-            <button class="tool" id="t-wrap" title="Word wrap">⤶</button>
-            <button class="tool" id="t-space" title="Show space changes">␣</button>
-            <button class="tool" id="t-fdec" title="Decrease font size">A-</button>
-            <button class="tool" id="t-finc" title="Increase font size">A+</button>
-            <button class="tool" id="t-lines" title="Show line numbers">#</button>
-          </div>
+      <!-- Full-width toolbar pinned at the very top, above panel and diff. -->
+      <div id="toolbar">
+        <div id="summary">
+          <span id="summary-text" class="mono"></span>
+          <span id="added" class="add"></span>
+          <span id="removed" class="del"></span>
         </div>
-        <div id="diff" class="diff"></div>
-      </main>
+        <div id="tools">
+          <button class="tool" id="t-wrap" title="Word wrap">⤶</button>
+          <button class="tool" id="t-space" title="Show space changes">␣</button>
+          <button class="tool" id="t-fdec" title="Decrease font size">A-</button>
+          <button class="tool" id="t-finc" title="Increase font size">A+</button>
+          <button class="tool" id="t-lines" title="Show line numbers">#</button>
+        </div>
+      </div>
+
+      <!-- Bottom row: side panel | main diff. -->
+      <div id="body">
+        <!-- Left side panel: commits (top) + files (bottom), resizable splits -->
+        <aside id="side">
+          <section id="commits-pane">
+            <div class="pane-head" id="commits-head">COMMITS</div>
+            <div class="pane-body" id="commit-list"></div>
+          </section>
+          <div class="vsplit" id="side-vsplit" title="Drag to resize"></div>
+          <section id="files-pane">
+            <div class="pane-head" id="files-head">FILES</div>
+            <div class="pane-body" id="file-tree"></div>
+          </section>
+        </aside>
+
+        <!-- Horizontal divider between side panel and main view -->
+        <div class="hsplit" id="side-hsplit" title="Drag to resize"></div>
+
+        <!-- Main view: scrollable diff -->
+        <main id="main">
+          <div id="diff" class="diff"></div>
+        </main>
+      </div>
     </div>
 
     <script src="app.js"></script>

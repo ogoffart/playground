@@ -221,8 +221,21 @@ function renderFileTree() {
 
   function walk(node, prefix, depth, parentCollapsed) {
     // directories first
-    for (const [dname, dnode] of node.dirs) {
-      const full = prefix + dname + "/";
+    for (let [dname, dnode] of node.dirs) {
+      // GitHub-style: collapse single-child directory chains (a/b/c) into one node,
+      // but stop merging as soon as a directory has files or branches.
+      let label = dname;
+      let full = prefix + dname + "/";
+      while (
+        dnode.files.length === 0 &&
+        dnode.dirs.size === 1
+      ) {
+        const [childName, childNode] = dnode.dirs.entries().next().value;
+        label += "/" + childName;
+        full += childName + "/";
+        dnode = childNode;
+      }
+
       const collapsed = collapseState.has(full);
       const dir = document.createElement("div");
       dir.className = "tree-dir";
@@ -232,7 +245,7 @@ function renderFileTree() {
       caret.className = "caret";
       caret.textContent = collapsed ? "▶" : "▼";
       dir.appendChild(caret);
-      dir.appendChild(document.createTextNode("📁 " + dname));
+      dir.appendChild(document.createTextNode("📁 " + label));
       dir.onclick = () => {
         if (collapsed) collapseState.delete(full);
         else collapseState.add(full);

@@ -1,7 +1,10 @@
-/* GitHub-familiar light theme — see SPEC.md "Visual style". */
+/* GitHub-familiar themes — see SPEC.md "Visual style".
+   Light by default; switches to dark via prefers-color-scheme. */
 :root {
+  color-scheme: light dark;
   --bg: #ffffff;
   --panel: #f6f8fa;
+  --toolbar-bg: #f6f8fa;
   --border: #d0d7de;
   --text: #1f2328;
   --muted: #656d76;
@@ -14,9 +17,36 @@
   --add-fg: #1a7f37;
   --del-fg: #cf222e;
   --hunk-bg: #ddf4ff;
+  --btn-bg: #f6f8fa;
+  --btn-hover: #eef1f4;
+  --hover: rgba(9, 105, 218, 0.06);
   --font-size: 12px;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
     "Liberation Mono", monospace;
+}
+
+/* GitHub dark palette, applied when the OS/desktop is in dark mode. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --toolbar-bg: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #2f81f7;
+    --sel: #1f6feb;
+    --add-bg: #12261e;
+    --add-mark: #2ea043;
+    --del-bg: #25171c;
+    --del-mark: #f85149;
+    --add-fg: #3fb950;
+    --del-fg: #f85149;
+    --hunk-bg: #0f2747;
+    --btn-bg: #21262d;
+    --btn-hover: #30363d;
+    --hover: rgba(177, 186, 196, 0.12);
+  }
 }
 
 * {
@@ -46,8 +76,16 @@ body {
 
 #app {
   display: flex;
+  flex-direction: column;
   height: 100vh;
   width: 100vw;
+}
+
+/* bottom row below the toolbar: side panel | main */
+#body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
 }
 
 /* --- left side panel ----------------------------------------------------- */
@@ -124,7 +162,7 @@ body {
   cursor: pointer;
 }
 .commit:hover {
-  background: rgba(9, 105, 218, 0.06);
+  background: var(--hover);
 }
 .commit.current {
   background: var(--sel);
@@ -143,13 +181,13 @@ body {
   padding: 2px 5px;
   border: 1px solid var(--border);
   border-radius: 4px;
-  background: #eaeef2;
+  background: var(--btn-bg);
   color: var(--text);
   cursor: pointer;
   flex: none;
 }
 .endpoint:hover {
-  background: #dde3ea;
+  background: var(--btn-hover);
 }
 .endpoint.active {
   background: var(--accent);
@@ -201,7 +239,7 @@ body {
   white-space: nowrap;
 }
 .tree-dir:hover {
-  background: rgba(9, 105, 218, 0.06);
+  background: var(--hover);
 }
 .tree-dir .caret {
   width: 10px;
@@ -218,7 +256,7 @@ body {
   font-size: 12px;
 }
 .tree-file:hover {
-  background: rgba(9, 105, 218, 0.06);
+  background: var(--hover);
 }
 .tree-file .icon {
   flex: none;
@@ -240,6 +278,18 @@ body {
   display: none;
 }
 
+/* --- toolbar (full-width, top of window) --------------------------------- */
+#toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--toolbar-bg);
+  flex: none;
+  width: 100%;
+}
+
 /* --- main view ----------------------------------------------------------- */
 #main {
   flex: 1;
@@ -248,16 +298,6 @@ body {
   flex-direction: column;
   background: var(--bg);
   overflow: hidden;
-}
-
-#toolbar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg);
-  flex: none;
 }
 
 #summary {
@@ -288,12 +328,16 @@ body {
   padding: 0 6px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: #f6f8fa;
+  background: var(--btn-bg);
   color: var(--text);
   cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 .tool:hover {
-  background: #eef1f4;
+  background: var(--btn-hover);
+}
+.tool:active {
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.25);
 }
 .tool.active {
   background: var(--sel);
