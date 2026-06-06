@@ -96,6 +96,42 @@ Rows sorted by total bundle.
 > depend on nothing beyond the base desktop. Sizes are this Linux build; Windows/macOS differ
 > (e.g. tauri uses the OS WebView ≈ 0 extra; Qt/GTK would still be bundled).
 
+### Feature coverage (where a framework couldn't do it)
+
+The core spec (toolbar, commit list + endpoints, hierarchical file tree with +/− counts,
+scrollable diff with gutter + syntax highlighting + red/green rows, light/dark **chrome**, and the
+word-wrap / whitespace / font / line-number toggles) is implemented in **all 14**. The table below
+flags only the spec details a given framework **could not** fully implement.
+
+**Legend:** ✅ implemented · 🟡 via a workaround / approximation · 🔴 **not achievable in this framework**
+
+| Framework | Sticky file header | Word-wrap reflow | Precise scroll-to-file |
+|---|:--:|:--:|:--:|
+| **tauri** | ✅ `position:sticky` | ✅ | ✅ |
+| **dioxus** | ✅ `position:sticky` | ✅ | ✅ |
+| **qt-qmetaobject** | ✅ `ListView` section | ✅ | ✅ |
+| **qt-cxx** | ✅ `ListView` section | ✅ | ✅ |
+| **gtk4** | 🟡 floating overlay | ✅ | ✅ |
+| **egui** | 🟡 redrawn overlay | ✅ | ✅ |
+| **slint** | 🟡 floating overlay | ✅ | ✅ |
+| **iced** | 🟡 floating overlay | ✅ | ✅ |
+| **floem** | 🔴 no sticky primitive | ✅ | ✅ |
+| **qt-widgets** | 🔴 stacked text views | ✅ | ✅ |
+| **gpui** | 🔴 single `uniform_list` | ✅ | ✅ |
+| **freya** | 🔴 no sticky positioning | ✅ | 🟡 estimated offset |
+| **xilem** | 🔴 `Portal` has no sticky | ✅ | 🟡 estimated offset |
+| **makepad** | 🔴 `PortalList` recycling | 🔴 custom widget clips | ✅ |
+
+Things **not** marked red because they're choices, not framework limits:
+- **Dark-mode code colours** follow the scheme in most apps but stay light (dark chrome, light
+  code) in **dioxus, qt-qmetaobject, qt-cxx, gpui, xilem** — a wiring choice in the shared
+  highlighter, doable in every framework.
+- **Multi-line syntax** (block comments across lines) is omitted in **all** apps — a deliberate
+  simplification of the shared per-line highlighter.
+- **Headless screenshots** for **gpui**, **makepad** and **xilem** are an *environment* limitation
+  of this no-GPU container (Vulkan swapchain / software-GL text), not a framework feature gap —
+  all three build and run.
+
 ### Strengths, limitations & score
 
 | Framework | 🟢 Strengths | 🔴 Limitations | Score |
