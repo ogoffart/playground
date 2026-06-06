@@ -1,1 +1,0 @@
-/home/user/playground/qt-qmetaobject/target/debug/git-review-qmetaobject: /home/user/playground/qt-qmetaobject/qml/main.qml /home/user/playground/qt-qmetaobject/src/git.rs /home/user/playground/qt-qmetaobject/src/highlight.rs /home/user/playground/qt-qmetaobject/src/main.rs
