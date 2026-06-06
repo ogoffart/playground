@@ -45,6 +45,9 @@ struct State {
     settings: Settings,
     commits: Vec<CommitInfo>,
     headers: Vec<HeaderPos>,
+    // The flattened file tree for the current diff (built in `recompute`). The UI repeats this
+    // model directly; `toggle-node` flips `expanded`/`visible` and we re-push it.
+    tree: Vec<TreeNode>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -80,6 +83,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         commits,
         headers: Vec::new(),
+        tree: Vec::new(),
     }));
 
     let app = AppWindow::new()?;
@@ -127,6 +131,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map(|h| h.y)
                 .unwrap_or(0.0);
             app.invoke_scroll_diff_to(y);
+        });
+    }
+
+    {
+        // Toggle a folder node: flip `expanded` and recompute every node's `visible` flag
+        // (a node is visible iff all its ancestor folders are expanded), then re-push the model.
+        let app_w = app.as_weak();
+        let state = state.clone();
+        app.on_toggle_node(move |i| {
+            let app = app_w.unwrap();
+            {
+                let mut st = state.borrow_mut();
+                if let Some(n) = st.tree.get_mut(i as usize) {
+                    if n.is_dir {
+                        n.expanded = !n.expanded;
+                    }
+                }
+                recompute_visibility(&mut st.tree);
+            }
+            push_tree(&app, &state);
         });
     }
 
@@ -290,23 +314,16 @@ fn recompute(app: &AppWindow, repo: &Rc<Repo>, hl: &Rc<Highlighter>, state: &Rc<
     app.set_summary(diff.summary.clone().into());
     app.set_total_added(diff.added as i32);
     app.set_total_removed(diff.removed as i32);
+    app.set_file_count(diff.files.len() as i32);
     app.set_line_numbers(line_numbers);
     app.set_wrap_lines(word_wrap);
     app.set_show_space(show_space);
     app.set_diff_font(font);
 
-    // file tree
-    let files: Vec<FileRow> = diff
-        .files
-        .iter()
-        .map(|f| FileRow {
-            icon: file_icon(&f.path).into(),
-            path: f.path.clone().into(),
-            added: f.added as i32,
-            removed: f.removed as i32,
-        })
-        .collect();
-    app.set_files(ModelRc::new(VecModel::from(files)));
+    // file tree — build a real hierarchical, flattened tree (folders + leaves)
+    let tree = build_tree(&diff.files);
+    state.borrow_mut().tree = tree;
+    push_tree(app, state);
 
     // diff items + header offsets
     let line_h = font * 1.5;
@@ -422,6 +439,189 @@ fn update_sticky(app: &AppWindow, state: &Rc<RefCell<State>>, y: f32) {
         }
         None => app.set_sticky_visible(false),
     }
+}
+
+// --- file tree --------------------------------------------------------------
+
+/// An intermediate tree node used while building the flattened model.
+enum Node {
+    Dir {
+        name: String,
+        children: Vec<(String, Node)>, // (component, child); preserves insertion order
+    },
+    File {
+        name: String,
+        icon: String,
+        added: i32,
+        removed: i32,
+        file_index: i32,
+    },
+}
+
+/// Build a flattened `[TreeNode]` from the diff's file list:
+/// directory components become collapsible folder nodes; files are leaves with `+a −r` counts.
+/// Single-child directory chains are collapsed GitHub-style (`a/b/c.rs`); distinct subtrees branch.
+fn build_tree(files: &[git::FileDiff]) -> Vec<TreeNode> {
+    // Build an order-preserving prefix tree of directory components.
+    let mut roots: Vec<(String, Node)> = Vec::new();
+
+    for (idx, f) in files.iter().enumerate() {
+        let parts: Vec<&str> = f.path.split('/').filter(|s| !s.is_empty()).collect();
+        if parts.is_empty() {
+            continue;
+        }
+        let (dirs, file_name) = parts.split_at(parts.len() - 1);
+        let leaf = Node::File {
+            name: file_name[0].to_string(),
+            icon: file_icon(&f.path).to_string(),
+            added: f.added as i32,
+            removed: f.removed as i32,
+            file_index: idx as i32,
+        };
+        insert(&mut roots, dirs, file_name[0], leaf);
+    }
+
+    // Collapse single-child directory chains (GitHub-style: `a/b/c.rs`).
+    collapse_chains(&mut roots);
+
+    // Flatten depth-first into rows.
+    let mut out: Vec<TreeNode> = Vec::new();
+    flatten(&roots, 0, &mut out);
+    out
+}
+
+/// Recursively insert a file leaf under the given directory path, creating dirs as needed.
+fn insert(nodes: &mut Vec<(String, Node)>, dirs: &[&str], file_name: &str, leaf: Node) {
+    match dirs.split_first() {
+        None => {
+            nodes.push((file_name.to_string(), leaf));
+        }
+        Some((comp, rest)) => {
+            let pos = match nodes.iter().position(|(c, _)| c == comp) {
+                Some(i) => i,
+                None => {
+                    nodes.push((
+                        comp.to_string(),
+                        Node::Dir {
+                            name: comp.to_string(),
+                            children: Vec::new(),
+                        },
+                    ));
+                    nodes.len() - 1
+                }
+            };
+            if let Node::Dir { children, .. } = &mut nodes[pos].1 {
+                insert(children, rest, file_name, leaf);
+            }
+        }
+    }
+}
+
+/// Collapse a folder that has exactly one child folder into a single `parent/child` node.
+fn collapse_chains(nodes: &mut Vec<(String, Node)>) {
+    for (_, node) in nodes.iter_mut() {
+        if let Node::Dir { name, children } = node {
+            // Merge while this dir has exactly one child and that child is also a dir.
+            while children.len() == 1 {
+                let only_is_dir = matches!(children[0].1, Node::Dir { .. });
+                if !only_is_dir {
+                    break;
+                }
+                let (_, child) = children.remove(0);
+                if let Node::Dir {
+                    name: cname,
+                    children: cchildren,
+                } = child
+                {
+                    *name = format!("{name}/{cname}");
+                    *children = cchildren;
+                }
+            }
+            collapse_chains(children);
+        }
+    }
+}
+
+fn flatten(nodes: &[(String, Node)], depth: i32, out: &mut Vec<TreeNode>) {
+    for (_, node) in nodes {
+        match node {
+            Node::Dir { name, children } => {
+                out.push(TreeNode {
+                    depth,
+                    is_dir: true,
+                    expanded: true,
+                    visible: true,
+                    name: name.clone().into(),
+                    icon: "📁".into(),
+                    added: 0,
+                    removed: 0,
+                    file_index: -1,
+                });
+                flatten(children, depth + 1, out);
+            }
+            Node::File {
+                name,
+                icon,
+                added,
+                removed,
+                file_index,
+            } => {
+                out.push(TreeNode {
+                    depth,
+                    is_dir: false,
+                    expanded: false,
+                    visible: true,
+                    name: name.clone().into(),
+                    icon: icon.clone().into(),
+                    added: *added,
+                    removed: *removed,
+                    file_index: *file_index,
+                });
+            }
+        }
+    }
+}
+
+/// Recompute each node's `visible` flag: a row is visible iff every ancestor folder is expanded.
+/// Uses a stack of (depth, expanded) for the currently open ancestors.
+fn recompute_visibility(tree: &mut [TreeNode]) {
+    let mut stack: Vec<(i32, bool)> = Vec::new();
+    for n in tree.iter_mut() {
+        while let Some(&(d, _)) = stack.last() {
+            if d >= n.depth {
+                stack.pop();
+            } else {
+                break;
+            }
+        }
+        let ancestors_open = stack.iter().all(|&(_, e)| e);
+        n.visible = ancestors_open;
+        if n.is_dir {
+            stack.push((n.depth, n.expanded));
+        }
+    }
+}
+
+fn push_tree(app: &AppWindow, state: &Rc<RefCell<State>>) {
+    // Only push currently-visible rows so every delegate is a constant-height row (collapsed
+    // subtrees simply drop out of the model). `toggle-node` indexes into the full `state.tree`,
+    // so we carry the full-tree row index in `file-index` for folders to remap clicks.
+    let st = state.borrow();
+    let rows: Vec<TreeNode> = st
+        .tree
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| n.visible)
+        .map(|(i, n)| {
+            let mut n = n.clone();
+            if n.is_dir {
+                // For folders, stash the full-tree index so toggle-node can find the node.
+                n.file_index = i as i32;
+            }
+            n
+        })
+        .collect();
+    app.set_tree(ModelRc::new(VecModel::from(rows)));
 }
 
 // --- DiffItem constructors --------------------------------------------------
