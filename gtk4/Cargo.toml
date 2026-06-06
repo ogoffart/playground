@@ -1,0 +1,19 @@
+[package]
+name = "git-review-gtk4"
+version = "0.1.0"
+edition = "2021"
+description = "A GitHub-style git code review desktop app, built with GTK4 (gtk4-rs)"
+
+[[bin]]
+name = "git-review-gtk4"
+path = "src/main.rs"
+
+[dependencies]
+gtk = { package = "gtk4", version = "0.9", features = ["v4_10"] }
+git2 = "0.20"
+syntect = { version = "5", default-features = false, features = ["default-fancy"] }
+two-face = "0.5"
+jiff = "0.2"
+
+[profile.dev]
+opt-level = 1
