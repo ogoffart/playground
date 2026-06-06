@@ -1,0 +1,22 @@
+[package]
+name = "git-review-qmetaobject"
+version = "0.1.0"
+edition = "2021"
+description = "A GitHub-style git code review desktop app, built with qmetaobject-rs (Qt Quick / QML)"
+
+[[bin]]
+name = "git-review-qmetaobject"
+path = "src/main.rs"
+
+[dependencies]
+qmetaobject = "0.2"
+cstr = "0.2"
+git2 = "0.20"
+syntect = { version = "5", default-features = false, features = ["default-fancy"] }
+two-face = "0.5"
+jiff = "0.2"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+
+[profile.dev]
+opt-level = 1
