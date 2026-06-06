@@ -1,0 +1,469 @@
+/* GitHub-familiar light theme — see SPEC.md "Visual style". */
+:root {
+  --bg: #ffffff;
+  --panel: #f6f8fa;
+  --border: #d0d7de;
+  --text: #1f2328;
+  --muted: #656d76;
+  --accent: #0969da;
+  --sel: #ddf4ff;
+  --add-bg: #e6ffec;
+  --add-mark: #abf2bc;
+  --del-bg: #ffebe9;
+  --del-mark: #ff8182;
+  --add-fg: #1a7f37;
+  --del-fg: #cf222e;
+  --hunk-bg: #ddf4ff;
+  --font-size: 12px;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial,
+    sans-serif;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.mono {
+  font-family: var(--mono);
+}
+
+#app {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+}
+
+/* --- left side panel ----------------------------------------------------- */
+#side {
+  width: 340px;
+  min-width: 220px;
+  max-width: 640px;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  flex: none;
+}
+
+#commits-pane,
+#files-pane {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#commits-pane {
+  height: 55%;
+  min-height: 80px;
+}
+
+#files-pane {
+  flex: 1;
+  min-height: 80px;
+}
+
+.pane-head {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  padding: 8px 10px 6px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pane-body {
+  overflow: auto;
+  flex: 1;
+}
+
+/* --- dividers ------------------------------------------------------------ */
+.hsplit {
+  width: 6px;
+  cursor: col-resize;
+  background: var(--border);
+  flex: none;
+}
+.hsplit:hover {
+  background: var(--accent);
+}
+
+.vsplit {
+  height: 6px;
+  cursor: row-resize;
+  background: var(--border);
+  flex: none;
+}
+.vsplit:hover {
+  background: var(--accent);
+}
+
+/* --- commit rows --------------------------------------------------------- */
+.commit {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+.commit:hover {
+  background: rgba(9, 105, 218, 0.06);
+}
+.commit.current {
+  background: var(--sel);
+}
+
+.commit-l1 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+
+.endpoint {
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #eaeef2;
+  color: var(--text);
+  cursor: pointer;
+  flex: none;
+}
+.endpoint:hover {
+  background: #dde3ea;
+}
+.endpoint.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.commit .sha {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--accent);
+  flex: none;
+}
+.commit .date {
+  font-size: 11px;
+  color: var(--muted);
+  flex: none;
+}
+.commit .author {
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.commit .title {
+  font-size: 12.5px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.endpoint-spacer {
+  width: 44px;
+  flex: none;
+}
+
+/* --- file tree ----------------------------------------------------------- */
+.tree-dir {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.tree-dir:hover {
+  background: rgba(9, 105, 218, 0.06);
+}
+.tree-dir .caret {
+  width: 10px;
+  display: inline-block;
+  font-size: 9px;
+}
+
+.tree-file {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.tree-file:hover {
+  background: rgba(9, 105, 218, 0.06);
+}
+.tree-file .icon {
+  flex: none;
+}
+.tree-file .name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1;
+}
+.tree-file .counts {
+  flex: none;
+  font-size: 11px;
+  display: flex;
+  gap: 6px;
+}
+.tree-file.hidden {
+  display: none;
+}
+
+/* --- main view ----------------------------------------------------------- */
+#main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+#toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  flex: none;
+}
+
+#summary {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+#summary-text {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#tools {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+
+.tool {
+  font-family: var(--mono);
+  font-size: 12px;
+  min-width: 28px;
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #f6f8fa;
+  color: var(--text);
+  cursor: pointer;
+}
+.tool:hover {
+  background: #eef1f4;
+}
+.tool.active {
+  background: var(--sel);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.add {
+  color: var(--add-fg);
+}
+.del {
+  color: var(--del-fg);
+}
+
+/* --- diff body ----------------------------------------------------------- */
+.diff {
+  flex: 1;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: var(--font-size);
+}
+
+.commit-message {
+  margin: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  user-select: text;
+}
+.commit-message h2 {
+  margin: 0 0 4px;
+  font-size: 18px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+.commit-message .meta {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+.commit-message pre {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: var(--font-size);
+  white-space: pre-wrap;
+  color: var(--text);
+}
+
+.file {
+  margin: 0 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.file-header {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 12.5px;
+}
+.file-header .icon {
+  flex: none;
+}
+.file-header .fpath {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-header .badge {
+  font-size: 11px;
+  color: var(--muted);
+  flex: none;
+}
+.file-header .counts {
+  margin-left: auto;
+  flex: none;
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.file-body {
+  background: var(--bg);
+  overflow-x: auto;
+}
+
+/* Each diff row is a grid: [old#][new#][sign][code]. */
+.row {
+  display: flex;
+  align-items: flex-start;
+  white-space: pre;
+  line-height: 1.5;
+}
+.diff.wrap .row {
+  white-space: pre-wrap;
+}
+.diff.wrap .code {
+  word-break: break-word;
+}
+
+.row.added {
+  background: var(--add-bg);
+}
+.row.removed {
+  background: var(--del-bg);
+}
+.row.hunk {
+  background: var(--hunk-bg);
+  color: var(--muted);
+}
+
+.gutter-num {
+  flex: none;
+  width: 3.2em;
+  padding: 0 6px 0 4px;
+  text-align: right;
+  color: var(--muted);
+  user-select: none;
+  background: rgba(0, 0, 0, 0.015);
+}
+.diff.no-lines .gutter-num {
+  display: none;
+}
+
+.sign {
+  flex: none;
+  width: 1.4em;
+  text-align: center;
+  user-select: none;
+}
+.row.added .sign {
+  background: var(--add-mark);
+  color: var(--add-fg);
+}
+.row.removed .sign {
+  background: var(--del-mark);
+  color: var(--del-fg);
+}
+
+.code {
+  padding: 0 8px;
+  flex: 1;
+  min-width: 0;
+  user-select: text;
+}
+.diff:not(.wrap) .code {
+  flex: none;
+}
+
+.empty {
+  padding: 24px;
+  color: var(--muted);
+  font-family: -apple-system, sans-serif;
+}
+.binary {
+  padding: 10px 14px;
+  color: var(--muted);
+  font-style: italic;
+}
+.error {
+  padding: 16px;
+  color: var(--del-fg);
+}
